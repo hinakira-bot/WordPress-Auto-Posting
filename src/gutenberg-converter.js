@@ -36,7 +36,112 @@ function extractTitle($container, $) {
 }
 
 // ---------------------------------------------------------------------------
-// Conversion: point / note  ->  caption box
+// Helper: convert inner HTML to Gutenberg block format
+// Used for content inside wp:group, wp:loos/step-item, etc.
+// ---------------------------------------------------------------------------
+function convertInnerToGutenberg(html) {
+  if (!html || !html.trim()) return '';
+
+  const blocks = splitTopLevelElements(html);
+  const result = [];
+
+  for (const block of blocks) {
+    const trimmed = block.trim();
+    if (!trimmed) continue;
+
+    // Already has Gutenberg comments — skip
+    if (/<!--\s*wp:/.test(trimmed)) {
+      result.push(trimmed);
+      continue;
+    }
+
+    const tagMatch = trimmed.match(/^<(\w+)[\s>]/);
+    if (!tagMatch) {
+      // Plain text — skip whitespace-only
+      if (trimmed.length > 0 && !/^\s+$/.test(trimmed)) {
+        result.push(`<!-- wp:paragraph -->\n<p>${trimmed}</p>\n<!-- /wp:paragraph -->`);
+      }
+      continue;
+    }
+
+    const tag = tagMatch[1].toLowerCase();
+
+    switch (tag) {
+      case 'p':
+        result.push(`<!-- wp:paragraph -->\n${trimmed}\n<!-- /wp:paragraph -->`);
+        break;
+      case 'h2':
+        result.push(`<!-- wp:heading -->\n${trimmed}\n<!-- /wp:heading -->`);
+        break;
+      case 'h3':
+        result.push(`<!-- wp:heading {"level":3} -->\n${trimmed}\n<!-- /wp:heading -->`);
+        break;
+      case 'h4':
+        result.push(`<!-- wp:heading {"level":4} -->\n${trimmed}\n<!-- /wp:heading -->`);
+        break;
+      case 'ul': {
+        const wrapped = wrapListForGutenberg(trimmed, false);
+        result.push(wrapped);
+        break;
+      }
+      case 'ol': {
+        const wrapped = wrapListForGutenberg(trimmed, true);
+        result.push(wrapped);
+        break;
+      }
+      case 'blockquote':
+        result.push(`<!-- wp:quote -->\n${trimmed}\n<!-- /wp:quote -->`);
+        break;
+      case 'figure':
+        result.push(`<!-- wp:image -->\n${trimmed}\n<!-- /wp:image -->`);
+        break;
+      case 'table':
+        result.push(`<!-- wp:table -->\n<figure class="wp-block-table">${trimmed}</figure>\n<!-- /wp:table -->`);
+        break;
+      default:
+        result.push(trimmed);
+    }
+  }
+
+  return result.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Helper: wrap a list (<ul>/<ol>) in proper Gutenberg format with list-item comments
+// ---------------------------------------------------------------------------
+function wrapListForGutenberg(listHtml, ordered = false) {
+  const $ = cheerio.load(listHtml, { decodeEntities: false, xmlMode: false });
+  const $list = $('ul, ol').first();
+
+  if (!$list.length) return listHtml;
+
+  // Add wp-block-list class
+  if (!$list.hasClass('wp-block-list')) {
+    $list.addClass('wp-block-list');
+  }
+
+  // Wrap each direct <li> child in wp:list-item comments
+  const liItems = [];
+  $list.children('li').each(function () {
+    const liOuterHtml = $.html(this);
+    liItems.push(`<!-- wp:list-item -->\n${liOuterHtml}\n<!-- /wp:list-item -->`);
+  });
+
+  // Reconstruct the list
+  const tag = ordered ? 'ol' : 'ul';
+  const classAttr = $list.attr('class') || 'wp-block-list';
+  const innerContent = liItems.join('\n');
+  const listOutput = `<${tag} class="${classAttr}">${innerContent}</${tag}>`;
+
+  const blockComment = ordered
+    ? '<!-- wp:list {"ordered":true} -->'
+    : '<!-- wp:list -->';
+
+  return `${blockComment}\n${listOutput}\n<!-- /wp:list -->`;
+}
+
+// ---------------------------------------------------------------------------
+// Conversion: point / note  ->  caption box (wp:html wrapping)
 // ---------------------------------------------------------------------------
 function convertCaptionBox($, el, style) {
   const $el = $(el);
@@ -58,7 +163,7 @@ function convertCaptionBox($, el, style) {
 }
 
 // ---------------------------------------------------------------------------
-// Conversion: check-list  ->  styled list in caption box
+// Conversion: check-list  ->  styled list in caption box (wp:html wrapping)
 // ---------------------------------------------------------------------------
 function convertCheckList($, el) {
   const $el = $(el);
@@ -89,7 +194,7 @@ function convertCheckList($, el) {
 }
 
 // ---------------------------------------------------------------------------
-// Conversion: step  ->  step block
+// Conversion: step  ->  proper wp:loos/step block
 // ---------------------------------------------------------------------------
 function convertStepBlock($, el) {
   const $el = $(el);
@@ -104,39 +209,53 @@ function convertStepBlock($, el) {
   children.each(function () {
     const $child = $(this);
     const title = extractTitle($child, $);
-    const body = $child.html() || '';
+    const bodyHtml = $child.html() || '';
+    const innerBlocks = convertInnerToGutenberg(bodyHtml);
 
     stepItems.push([
-      `  <div class="swell-block-step__item">`,
-      `    <div class="swell-block-step__title">${title}</div>`,
-      `    <div class="swell-block-step__body">${body.trim()}</div>`,
-      `  </div>`,
+      `<!-- wp:loos/step-item {"stepLabel":"STEP","numColor":"var(--color_deep02)"} -->`,
+      `<div class="swell-block-step__item">`,
+      `<div class="swell-block-step__number" style="background-color:var(--color_deep02)"><span class="__label">STEP</span></div>`,
+      `<div class="swell-block-step__title u-fz-l">${title}</div>`,
+      `<div class="swell-block-step__body">`,
+      innerBlocks,
+      `</div>`,
+      `</div>`,
+      `<!-- /wp:loos/step-item -->`,
     ].join('\n'));
   });
 
   // Handle case where there are no structural children — treat entire content as one step
   if (stepItems.length === 0) {
     const title = extractTitle($el, $);
-    const body = $el.html() || '';
+    const bodyHtml = $el.html() || '';
+    const innerBlocks = convertInnerToGutenberg(bodyHtml);
     stepItems.push([
-      `  <div class="swell-block-step__item">`,
-      `    <div class="swell-block-step__title">${title}</div>`,
-      `    <div class="swell-block-step__body">${body.trim()}</div>`,
-      `  </div>`,
+      `<!-- wp:loos/step-item {"stepLabel":"STEP","numColor":"var(--color_deep02)"} -->`,
+      `<div class="swell-block-step__item">`,
+      `<div class="swell-block-step__number" style="background-color:var(--color_deep02)"><span class="__label">STEP</span></div>`,
+      `<div class="swell-block-step__title u-fz-l">${title}</div>`,
+      `<div class="swell-block-step__body">`,
+      innerBlocks,
+      `</div>`,
+      `</div>`,
+      `<!-- /wp:loos/step-item -->`,
     ].join('\n'));
   }
 
   const output = [
-    `<div class="swell-block-step">`,
+    `<!-- wp:loos/step -->`,
+    `<div class="swell-block-step" data-num-style="circle">`,
     stepItems.join('\n'),
     `</div>`,
+    `<!-- /wp:loos/step -->`,
   ].join('\n');
 
   $el.replaceWith(output);
 }
 
 // ---------------------------------------------------------------------------
-// Conversion: faq  ->  FAQ block
+// Conversion: faq  ->  FAQ block (wp:html wrapping)
 // ---------------------------------------------------------------------------
 function convertFaqBlock($, el) {
   const $el = $(el);
@@ -209,9 +328,9 @@ function wrapFaqBlock(items) {
 }
 
 // ---------------------------------------------------------------------------
-// Conversion: balloon  ->  speech bubble
+// Conversion: balloon  ->  proper wp:loos/balloon block
 // ---------------------------------------------------------------------------
-function convertBalloonBlock($, el) {
+function convertBalloonBlock($, el, balloonID = '1') {
   const $el = $(el);
 
   // Grab the inner HTML; if it already contains <p>, keep it, otherwise wrap
@@ -222,30 +341,32 @@ function convertBalloonBlock($, el) {
     bodyHtml = `<p>${bodyHtml}</p>`;
   }
 
+  // wp:loos/balloon format — just the <p> content between comments
   const output = [
-    `<div class="swell-block-balloon">`,
-    `  <div class="swell-block-balloon__body">`,
-    `    ${bodyHtml}`,
-    `  </div>`,
-    `</div>`,
+    `<!-- wp:loos/balloon {"balloonID":"${balloonID}"} -->`,
+    bodyHtml,
+    `<!-- /wp:loos/balloon -->`,
   ].join('\n');
 
   $el.replaceWith(output);
 }
 
 // ---------------------------------------------------------------------------
-// Conversion: group box (border / background style)
+// Conversion: group box (border / background style)  ->  proper wp:group block
 // ---------------------------------------------------------------------------
 function convertGroupBox($, el, cssClass) {
   const $el = $(el);
   const body = $el.html() || '';
 
+  // Convert inner content to proper Gutenberg blocks
+  const innerBlocks = convertInnerToGutenberg(body);
+
   const output = [
+    `<!-- wp:group {"className":"${cssClass}"} -->`,
     `<div class="wp-block-group ${cssClass}">`,
-    `  <div class="wp-block-group__inner-container">`,
-    `    ${body.trim()}`,
-    `  </div>`,
+    innerBlocks,
     `</div>`,
+    `<!-- /wp:group -->`,
   ].join('\n');
 
   $el.replaceWith(output);
@@ -253,23 +374,30 @@ function convertGroupBox($, el, cssClass) {
 
 // ---------------------------------------------------------------------------
 // SWELL type -> { settingsKey, handler }
+// Handlers that need settings receive them via closure in applySWELLDecorations
 // ---------------------------------------------------------------------------
 const SWELL_TYPES = {
-  point: { settingsKey: 'captionBox', handler: ($, el) => convertCaptionBox($, el, 'point') },
-  note: { settingsKey: 'captionBox', handler: ($, el) => convertCaptionBox($, el, 'note') },
-  'check-list': { settingsKey: 'checkList', handler: convertCheckList },
-  step: { settingsKey: 'stepBlock', handler: convertStepBlock },
-  faq: { settingsKey: 'faqBlock', handler: convertFaqBlock },
-  balloon: { settingsKey: 'balloonBlock', handler: convertBalloonBlock },
+  point: { settingsKey: 'captionBox', handler: ($, el, settings) => convertCaptionBox($, el, 'point') },
+  note: { settingsKey: 'captionBox', handler: ($, el, settings) => convertCaptionBox($, el, 'note') },
+  'check-list': { settingsKey: 'checkList', handler: ($, el, settings) => convertCheckList($, el) },
+  step: { settingsKey: 'stepBlock', handler: ($, el, settings) => convertStepBlock($, el) },
+  faq: { settingsKey: 'faqBlock', handler: ($, el, settings) => convertFaqBlock($, el) },
+  balloon: {
+    settingsKey: 'balloonBlock',
+    handler: ($, el, settings) => {
+      const balloonID = settings?.swell?.balloonID || '1';
+      convertBalloonBlock($, el, balloonID);
+    },
+  },
   // ボーダー設定
-  border: { settingsKey: 'groupStyle', handler: ($, el) => convertGroupBox($, el, 'has-border -border01') },
-  'border-double': { settingsKey: 'groupStyle', handler: ($, el) => convertGroupBox($, el, 'has-border -border02') },
-  'border-dashed': { settingsKey: 'groupStyle', handler: ($, el) => convertGroupBox($, el, 'has-border -border03') },
-  'bg-color': { settingsKey: 'groupStyle', handler: ($, el) => convertGroupBox($, el, 'has-border -border04') },
+  border: { settingsKey: 'groupStyle', handler: ($, el, settings) => convertGroupBox($, el, 'has-border -border01') },
+  'border-double': { settingsKey: 'groupStyle', handler: ($, el, settings) => convertGroupBox($, el, 'has-border -border02') },
+  'border-dashed': { settingsKey: 'groupStyle', handler: ($, el, settings) => convertGroupBox($, el, 'has-border -border03') },
+  'bg-color': { settingsKey: 'groupStyle', handler: ($, el, settings) => convertGroupBox($, el, 'has-border -border04') },
   // スタイル（背景装飾）
-  stripe: { settingsKey: 'groupStyle', handler: ($, el) => convertGroupBox($, el, 'is-style-bg_stripe') },
-  grid: { settingsKey: 'groupStyle', handler: ($, el) => convertGroupBox($, el, 'is-style-bg_grid') },
-  stitch: { settingsKey: 'groupStyle', handler: ($, el) => convertGroupBox($, el, 'is-style-stitch') },
+  stripe: { settingsKey: 'groupStyle', handler: ($, el, settings) => convertGroupBox($, el, 'is-style-bg_stripe') },
+  grid: { settingsKey: 'groupStyle', handler: ($, el, settings) => convertGroupBox($, el, 'is-style-bg_grid') },
+  stitch: { settingsKey: 'groupStyle', handler: ($, el, settings) => convertGroupBox($, el, 'is-style-stitch') },
 };
 
 // ===========================================================================
@@ -323,7 +451,8 @@ export function applySWELLDecorations(html, settings = {}) {
         return;
       }
 
-      spec.handler($, this);
+      // Pass settings to handler for balloon ID etc.
+      spec.handler($, this, settings);
     });
 
     // cheerio.load wraps content in <html><head><body>, extract just the body
@@ -424,13 +553,13 @@ export function convertToGutenbergBlocks(html, settings = {}) {
         continue;
       }
 
-      // Already has Gutenberg comments — skip
+      // Already has Gutenberg comments (wp:group, wp:loos/balloon, wp:loos/step, etc.) — skip
       if (/<!--\s*wp:/.test(trimmed)) {
         result.push(block);
         continue;
       }
 
-      // SWELL block div — wrap in wp:html so WordPress recognizes it as a Gutenberg block
+      // SWELL block div (capbox, faq, etc.) — wrap in wp:html
       if (/class\s*=\s*["'][^"']*swell-block-/i.test(trimmed)) {
         result.push(`<!-- wp:html -->\n${trimmed}\n<!-- /wp:html -->`);
         continue;
@@ -445,6 +574,14 @@ export function convertToGutenbergBlocks(html, settings = {}) {
       }
 
       const tag = tagMatch[1].toLowerCase();
+
+      // Lists need special handling: add wp-block-list class and wp:list-item comments
+      if (tag === 'ul' || tag === 'ol') {
+        const wrapped = wrapListForGutenberg(trimmed, tag === 'ol');
+        result.push(wrapped);
+        continue;
+      }
+
       const wrap = gutenbergWrapFor(tag, trimmed);
 
       if (!wrap) {

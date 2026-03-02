@@ -33,6 +33,7 @@ const DEFAULT_SETTINGS = {
     stepBlock: true,
     faqBlock: true,
     balloonBlock: true,
+    balloonID: '1',
     checkList: true,
     groupStyle: true,
   },
