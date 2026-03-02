@@ -473,7 +473,7 @@ function embedDiagramImages(bodyHtml, diagrams, uploadedDiagrams) {
     }
 
     const altText = h2Text || 'diagram';
-    const figureHtml = `<figure class="wp-block-image size-large"><img src="${url}" alt="${altText}" width="800" /><figcaption>${altText}</figcaption></figure>`;
+    const figureHtml = `<figure class="wp-block-image size-large" style="margin-top:0; margin-bottom:2em;"><img src="${url}" alt="${altText}" width="800" /><figcaption>${altText}</figcaption></figure>`;
 
     targetH2.after(figureHtml);
     logger.debug(`図解挿入: index=${targetIndex}, h2="${h2Text}"`);

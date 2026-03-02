@@ -422,7 +422,7 @@ export function convertToGutenbergBlocks(html, settings = {}) {
 
       if (!wrap) {
         // Unrecognised tag (e.g. <div> without SWELL class) — wrap in wp:html
-        if (t === 'div') {
+        if (tag === 'div') {
           result.push(`<!-- wp:html -->\n${trimmed}\n<!-- /wp:html -->`);
         } else {
           result.push(block);
@@ -437,6 +437,9 @@ export function convertToGutenbergBlocks(html, settings = {}) {
         result.push(
           `${open}\n<figure class="wp-block-table">${trimmed}</figure>\n${close}`
         );
+      } else if (tag === 'figure' && /wp-block-image/i.test(trimmed)) {
+        // 図解画像: h2直下のため上余白なし・下余白あり
+        result.push(`<!-- wp:image {"style":{"spacing":{"margin":{"top":"0","bottom":"var:preset|spacing|40"}}}} -->\n${trimmed}\n<!-- /wp:image -->`);
       } else {
         result.push(`${open}\n${trimmed}\n${close}`);
       }
