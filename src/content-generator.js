@@ -324,7 +324,7 @@ function convertPlainUrlsToLinks(html) {
  * @param {object} context - {description, knowledge, latestNews, mode}
  */
 export async function generateArticle(keyword, analysisData, context = {}) {
-  const { description = '', knowledge = '', latestNews = null, evidence = null, mode = 'keyword-only', existingArticles = '' } = context;
+  const { description = '', knowledge = '', latestNews = null, evidence = null, mode = 'keyword-only', existingArticles = '', onProgress } = context;
   logger.info(`=== 記事生成開始: "${keyword || description.slice(0, 30)}" (${mode}) ===`);
 
   // 最新情報をテキスト化
@@ -356,25 +356,33 @@ export async function generateArticle(keyword, analysisData, context = {}) {
   };
 
   // STEP 1: 検索意図分析
+  onProgress?.({ step: 'content', message: '検索意図を分析中...', progress: 39 });
   const searchIntent = await analyzeSearchIntent(keyword, analysisData, baseVars);
   logger.info(`検索意図: ${searchIntent.searchIntent} - ${searchIntent.userNeeds}`);
 
   // STEP 2: 見出し構成
+  onProgress?.({ step: 'content', message: '見出し構成を作成中...', progress: 41 });
   const outline = await generateOutline(keyword, analysisData, searchIntent, baseVars);
   logger.info(`見出し構成: h2 × ${outline.outline.length}個`);
 
   // STEP 3: タイトル生成
+  onProgress?.({ step: 'content', message: 'タイトルを生成中...', progress: 44 });
   const titleData = await generateTitle(keyword, outline, searchIntent, baseVars);
   const title = titleData.titles[titleData.recommended || 0];
   logger.info(`タイトル: ${title}`);
+  onProgress?.({ message: `タイトル: ${title}`, progress: 46, title });
 
   // STEP 4: リード文生成
+  onProgress?.({ step: 'content', message: 'リード文を生成中...', progress: 48 });
   const leadHtml = await generateLead(keyword, title, outline, searchIntent, baseVars);
 
   // STEP 5: 本文生成（リード文・まとめ除く）
+  onProgress?.({ step: 'content', message: '本文を生成中...', progress: 50 });
   const rawBodyHtml = await generateBody(keyword, title, outline, searchIntent, baseVars);
+  onProgress?.({ message: '本文生成完了', progress: 55 });
 
   // STEP 6: まとめ文生成
+  onProgress?.({ step: 'content', message: 'まとめ文を生成中...', progress: 56 });
   const summaryHtml = await generateSummary(keyword, title, outline, searchIntent, rawBodyHtml, baseVars);
 
   // STEP 7: 結合 + 後処理

@@ -139,6 +139,7 @@ export async function runPipeline(options = {}) {
       evidence: evidenceData,
       mode,
       existingArticles,
+      onProgress,
     });
     onProgress?.({ message: `記事生成完了: ${article.title}`, progress: 60, title: article.title });
 
