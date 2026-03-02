@@ -90,7 +90,7 @@ async function generateImage(prompt, outputPath, referenceImages = [], retries =
             responseModalities: ['image', 'text'],
           },
         }),
-        120_000, // 120秒タイムアウト
+        180_000, // 180秒（3分）タイムアウト
         `画像生成 (試行${attempt + 1})`
       );
 
