@@ -10,7 +10,9 @@ const TEMPLATE_NAMES = [
   'article-search-intent',
   'article-outline',
   'article-title',
+  'article-lead',
   'article-body',
+  'article-summary',
   'image-eyecatch',
   'image-diagram',
 ];

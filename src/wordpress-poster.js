@@ -486,6 +486,34 @@ function embedDiagramImages(bodyHtml, diagrams, uploadedDiagrams) {
 // 10. postToWordPress (Main)
 // ---------------------------------------------------------------------------
 
+/**
+ * キーワードからURLスラッグを生成
+ * 日本語キーワードはそのまま使用（WordPressがURL-encodeする）
+ * 英数字のみならケバブケースに変換
+ */
+function generateSlug(keyword, title) {
+  const source = keyword || title || '';
+  if (!source) return '';
+
+  // 英数字のみの場合はケバブケースに変換
+  const hasJapanese = /[ぁ-んァ-ヶ亜-熙々〇]/.test(source);
+  if (!hasJapanese) {
+    return source
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+  }
+
+  // 日本語の場合はスペースをハイフンに、不要な記号を除去
+  return source
+    .replace(/[\s　]+/g, '-')
+    .replace(/[!！?？、。,.\[\]【】「」『』（）()]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
 export async function postToWordPress(article, imageFiles, options = {}) {
   const startTime = Date.now();
 
@@ -592,11 +620,19 @@ export async function postToWordPress(article, imageFiles, options = {}) {
     // --- Step 5: Create post ---
     logger.info('--- WordPress投稿作成 ---');
 
+    // スラッグ（パーマリンク）生成
+    const slug = options.slug || generateSlug(article.keyword, article.title);
+
     const postData = {
       title: article.title,
       content: finalHtml,
       status: 'publish',
     };
+
+    if (slug) {
+      postData.slug = slug;
+      logger.info(`スラッグ（パーマリンク）: ${slug}`);
+    }
 
     if (featuredMediaId) {
       postData.featured_media = featuredMediaId;
@@ -610,7 +646,7 @@ export async function postToWordPress(article, imageFiles, options = {}) {
       postData.categories = categoryIds;
     }
 
-    logger.info(`投稿データ: title="${article.title}", tags=${tagIds.length}件, categories=${categoryIds.length}件, featured_media=${featuredMediaId || 'なし'}`);
+    logger.info(`投稿データ: title="${article.title}", slug="${slug || '(自動)'}", tags=${tagIds.length}件, categories=${categoryIds.length}件, featured_media=${featuredMediaId || 'なし'}`);
 
     const post = await wpFetchJSON('/posts', {
       method: 'POST',
@@ -623,12 +659,14 @@ export async function postToWordPress(article, imageFiles, options = {}) {
     logger.info(`  WordPress投稿成功! (${elapsed}秒)`);
     logger.info(`  投稿ID: ${post.id}`);
     logger.info(`  URL: ${post.link}`);
+    logger.info(`  スラッグ: ${post.slug || slug || '(自動)'}`);
     logger.info(`  タイトル: ${article.title}`);
     logger.info('========================================');
 
     return {
       success: true,
       url: post.link,
+      slug: post.slug || slug || '',
       title: article.title,
     };
   } catch (err) {

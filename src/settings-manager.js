@@ -8,7 +8,7 @@ const DEFAULT_SETTINGS = {
   article: {
     minLength: 2000,
     maxLength: 4000,
-    defaultCategory: '',
+    defaultCategory: 'AI',
     targetAudience: '',
     defaultHashtags: '',
   },

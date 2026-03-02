@@ -3,7 +3,7 @@ import { analyzeCompetitors, searchLatestNews } from './competitor-analyzer.js';
 import { generateArticle } from './content-generator.js';
 import { generateAllImages } from './image-generator.js';
 import { postToWordPress } from './wordpress-poster.js';
-import { logPost } from './post-logger.js';
+import { logPost, getArticleIndexForPrompt } from './post-logger.js';
 import { loadAllKnowledge } from './knowledge-manager.js';
 import { getSetting } from './settings-manager.js';
 import config from './config.js';
@@ -112,7 +112,13 @@ export async function runPipeline(options = {}) {
       onProgress?.({ message: `最新情報: ${newsCount}件取得`, progress: 32 });
     }
 
-    // === STEP 2: 記事生成（description + knowledge + latestNews を渡す） ===
+    // === STEP 1.7: 投稿済み記事インデックス取得（内部リンク用） ===
+    const existingArticles = getArticleIndexForPrompt();
+    if (existingArticles) {
+      logger.info(`内部リンク用記事インデックス: ${existingArticles.split('\n').length - 1}件`);
+    }
+
+    // === STEP 2: 記事生成（description + knowledge + latestNews + existingArticles を渡す） ===
     onProgress?.({ step: 'content', message: '記事生成中...', progress: 35 });
     logger.info('--- STEP 2: 記事生成 ---');
     const article = await generateArticle(keyword, analysisData, {
@@ -120,6 +126,7 @@ export async function runPipeline(options = {}) {
       knowledge,
       latestNews,
       mode,
+      existingArticles,
     });
     onProgress?.({ message: `記事生成完了: ${article.title}`, progress: 60, title: article.title });
 
@@ -171,6 +178,7 @@ export async function runPipeline(options = {}) {
         keyword: keyword || description.slice(0, 40),
         title: article.title,
         url: postResult.url || '',
+        slug: postResult.slug || '',
         dryRun,
         elapsedSeconds: elapsed,
         imageCount: imageFiles.diagrams.filter((d) => d.imagePath).length + (imageFiles.eyecatchPath ? 1 : 0),

@@ -299,7 +299,7 @@ function convertPlainUrlsToLinks(html) {
  * @param {object} context - {description, knowledge, latestNews, mode}
  */
 export async function generateArticle(keyword, analysisData, context = {}) {
-  const { description = '', knowledge = '', latestNews = null, mode = 'keyword-only' } = context;
+  const { description = '', knowledge = '', latestNews = null, mode = 'keyword-only', existingArticles = '' } = context;
   logger.info(`=== 記事生成開始: "${keyword || description.slice(0, 30)}" (${mode}) ===`);
 
   // 最新情報をテキスト化
@@ -317,6 +317,7 @@ export async function generateArticle(keyword, analysisData, context = {}) {
     description,
     knowledge,
     latestNews: latestNewsText,
+    existingArticles,
     minLength: String(config.posting.minLength),
     maxLength: String(config.posting.maxLength),
     settingsTargetAudience,
