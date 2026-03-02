@@ -143,7 +143,7 @@ async function generateBody(keyword, title, outline, searchIntent, baseVars) {
     targetAudience,
   });
 
-  const result = await generateWithRetry(prompt, { timeoutMs: 180_000, label: '本文生成' });
+  const result = await generateWithRetry(prompt, { timeoutMs: 300_000, label: '本文生成' });
   let bodyHtml = result.response.text().replace(/```html\n?/g, '').replace(/```\n?/g, '').trim();
 
   return bodyHtml;
