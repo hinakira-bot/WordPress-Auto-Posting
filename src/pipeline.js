@@ -163,12 +163,13 @@ export async function runPipeline(options = {}) {
       // === STEP 1.5: 最新情報検索 ===
       latestNews = null;
       if (keyword) {
-        onProgress?.({ step: 'analysis', message: '最新情報を検索中...', progress: 28 });
-        logger.info('--- STEP 1.5: 最新情報検索 ---');
+        onProgress?.({ step: 'analysis', message: '最新情報を検索中（日本語+海外）...', progress: 28 });
+        logger.info('--- STEP 1.5: 最新情報検索（日本語+海外 並列） ---');
         latestNews = await searchLatestNews(keyword);
-        const newsCount = latestNews?.latestNews?.length || 0;
-        logger.info(`最新情報: ${newsCount}件取得`);
-        onProgress?.({ message: `最新情報: ${newsCount}件取得`, progress: 32 });
+        const jaCount = (latestNews?.latestNews || []).filter(n => n.region === 'ja').length;
+        const enCount = (latestNews?.latestNews || []).filter(n => n.region === 'en').length;
+        logger.info(`最新情報: 国内${jaCount}件 + 海外${enCount}件 = 合計${jaCount + enCount}件`);
+        onProgress?.({ message: `最新情報: 国内${jaCount}件 + 海外${enCount}件`, progress: 32 });
       }
 
       // === STEP 1.6: エビデンス調査（論文・公的文書・統計） ===

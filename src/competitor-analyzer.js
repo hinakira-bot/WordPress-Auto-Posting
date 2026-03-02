@@ -188,27 +188,54 @@ export function formatAnalysisForPrompt(analysis) {
 }
 
 /**
- * Gemini + Google Search Grounding で最新情報を取得
+ * Gemini + Google Search Grounding で最新情報を取得（日本語 + 英語の2軸並列検索）
  */
 export async function searchLatestNews(keyword) {
-  logger.info(`最新情報を検索中: "${keyword}"`);
+  logger.info(`最新情報を検索中（日本語+英語）: "${keyword}"`);
 
+  const currentYear = new Date().getFullYear();
+  const now = new Date();
+  const threeMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 3, 1);
+  const recentPeriod = `${threeMonthsAgo.getFullYear()}年${threeMonthsAgo.getMonth() + 1}月〜${now.getFullYear()}年${now.getMonth() + 1}月`;
+
+  // 日本語検索と英語検索を並列実行
+  const [jaResult, enResult] = await Promise.all([
+    searchLatestNewsJA(keyword, currentYear, recentPeriod),
+    searchLatestNewsEN(keyword, currentYear, recentPeriod),
+  ]);
+
+  // 結果をマージ
+  const merged = mergeLatestNews(jaResult, enResult);
+  const totalCount = merged.latestNews?.length || 0;
+  logger.info(`最新情報マージ完了: 日本${jaResult.latestNews?.length || 0}件 + 海外${enResult.latestNews?.length || 0}件 = 合計${totalCount}件`);
+
+  return merged;
+}
+
+/**
+ * 日本語ソースから最新情報を検索
+ */
+async function searchLatestNewsJA(keyword, currentYear, recentPeriod) {
   const model = genAI.getGenerativeModel({
     model: config.gemini.textModel,
     tools: [{ googleSearch: {} }],
   });
 
-  const currentYear = new Date().getFullYear();
-  const prompt = `以下のキーワードに関する最新情報・最新ニュースを調査してください。
+  const prompt = `以下のキーワードに関する「日本国内の最新情報」を調査してください。
 
 キーワード: "${keyword}"
 
-特に以下の観点で調査してください：
-- ${currentYear}年の最新ニュース・トレンド・アップデート
-- 最近発表されたデータ・統計・調査結果
-- 業界の最新動向・変化・新サービス
-- 法改正・制度変更など最新の公式情報
-- 検索上位の既存記事にはまだ含まれていない可能性のある新しい情報
+【検索条件】
+- 対象期間: ${recentPeriod}（直近3ヶ月以内の情報を最優先）
+- 言語: 日本語の情報源を優先
+- 重点ソース: 日本のニュースサイト、テックメディア（ITmedia、TechCrunch Japan、CNET Japan、Impress、GIGAZINE等）、プレスリリース、公式ブログ
+
+【調査観点】
+- ${currentYear}年の最新ニュース・プレスリリース・リリース情報
+- 最新のアップデート・バージョンアップ・新機能
+- 日本市場特有の動向・日本語対応・日本向けサービス
+- 国内企業・団体の最新の取り組み・発表
+- 最新の統計データ・市場調査・利用者数
 
 以下のJSON形式で出力してください。JSON以外のテキストは不要です。
 {
@@ -217,25 +244,118 @@ export async function searchLatestNews(keyword) {
       "title": "ニュースのタイトルや要約",
       "detail": "具体的な内容（数値・日付含む）",
       "source": "情報源（サイト名やURL）",
-      "date": "発表日・掲載日（わかる範囲）"
+      "date": "発表日・掲載日（わかる範囲）",
+      "region": "ja"
     }
   ],
   "trends": ["最新トレンド1", "最新トレンド2"],
-  "keyInsights": "記事に反映すべき重要な最新ポイントの要約（200字以内）"
+  "keyInsights": "日本国内で記事に反映すべき重要な最新ポイントの要約（200字以内）"
 }
 
-最新で信頼性の高い情報を5〜10件程度取得してください。`;
+できるだけ新しい（直近1〜3ヶ月以内の）信頼性の高い情報を5〜10件取得してください。古い情報は含めないでください。`;
 
   try {
-    const result = await withTimeout(model.generateContent(prompt), 60_000, '最新情報検索');
+    const result = await withTimeout(model.generateContent(prompt), 60_000, '最新情報検索(日本)');
     const text = result.response.text();
     const parsed = parseJSON(text);
-    logger.info(`最新情報: ${parsed.latestNews?.length || 0}件取得`);
+    // regionフラグを付与
+    if (parsed.latestNews) {
+      parsed.latestNews = parsed.latestNews.map(n => ({ ...n, region: 'ja' }));
+    }
+    logger.info(`最新情報(日本): ${parsed.latestNews?.length || 0}件取得`);
     return parsed;
   } catch (err) {
-    logger.warn(`最新情報検索エラー: ${err.message}`);
+    logger.warn(`最新情報検索(日本)エラー: ${err.message}`);
     return { latestNews: [], trends: [], keyInsights: '' };
   }
+}
+
+/**
+ * 英語（海外）ソースから最新情報を検索
+ */
+async function searchLatestNewsEN(keyword, currentYear, recentPeriod) {
+  const model = genAI.getGenerativeModel({
+    model: config.gemini.textModel,
+    tools: [{ googleSearch: {} }],
+  });
+
+  const prompt = `Search for the latest international news and updates about the following topic. Respond in Japanese.
+
+Topic/Keyword: "${keyword}"
+
+【Search Criteria】
+- Period: Last 3 months (${recentPeriod}) - prioritize the most recent information
+- Language: Search English-language sources (global tech media, official blogs, release notes)
+- Priority Sources: TechCrunch, The Verge, Ars Technica, Wired, official product blogs, GitHub release notes, major tech company announcements (Google, OpenAI, Microsoft, Meta, etc.)
+
+【Investigation Focus】
+- Latest product updates, version releases, new features announced in ${currentYear}
+- Breaking news and major announcements from the global tech industry
+- International market trends and adoption data
+- Research papers, benchmarks, and performance comparisons
+- Pricing changes, API updates, policy changes
+- Information that Japanese articles may not have covered yet
+
+Output in the following JSON format. No text other than JSON is needed.
+Respond with Japanese text for title, detail, and keyInsights fields.
+{
+  "latestNews": [
+    {
+      "title": "ニュースのタイトルや要約（日本語で）",
+      "detail": "具体的な内容（数値・日付含む）（日本語で）",
+      "source": "Source name or URL (English OK)",
+      "date": "Publication date (if available)",
+      "region": "en"
+    }
+  ],
+  "trends": ["グローバルトレンド1（日本語で）", "トレンド2"],
+  "keyInsights": "海外情報で記事に反映すべき重要なポイントの要約（日本語200字以内）"
+}
+
+Find 5-10 recent and reliable pieces of information. Prioritize news from the last 1-3 months. Do not include outdated information.`;
+
+  try {
+    const result = await withTimeout(model.generateContent(prompt), 60_000, '最新情報検索(海外)');
+    const text = result.response.text();
+    const parsed = parseJSON(text);
+    // regionフラグを付与
+    if (parsed.latestNews) {
+      parsed.latestNews = parsed.latestNews.map(n => ({ ...n, region: 'en' }));
+    }
+    logger.info(`最新情報(海外): ${parsed.latestNews?.length || 0}件取得`);
+    return parsed;
+  } catch (err) {
+    logger.warn(`最新情報検索(海外)エラー: ${err.message}`);
+    return { latestNews: [], trends: [], keyInsights: '' };
+  }
+}
+
+/**
+ * 日本語・英語の最新情報をマージ
+ */
+function mergeLatestNews(jaResult, enResult) {
+  const mergedNews = [
+    ...(jaResult.latestNews || []),
+    ...(enResult.latestNews || []),
+  ];
+
+  const mergedTrends = [
+    ...(jaResult.trends || []),
+    ...(enResult.trends || []),
+  ];
+  // トレンドの重複除去
+  const uniqueTrends = [...new Set(mergedTrends)];
+
+  // keyInsightsを統合
+  const insights = [];
+  if (jaResult.keyInsights) insights.push(`【国内】${jaResult.keyInsights}`);
+  if (enResult.keyInsights) insights.push(`【海外】${enResult.keyInsights}`);
+
+  return {
+    latestNews: mergedNews,
+    trends: uniqueTrends,
+    keyInsights: insights.join('\n'),
+  };
 }
 
 /**
@@ -323,14 +443,14 @@ export function formatEvidenceForPrompt(evidence) {
 }
 
 /**
- * 最新情報をプロンプト用テキストに変換
+ * 最新情報をプロンプト用テキストに変換（日本語/海外を区別）
  */
 export function formatLatestNewsForPrompt(latestNews) {
   if (!latestNews || (!latestNews.latestNews?.length && !latestNews.keyInsights)) {
     return '';
   }
 
-  let text = `## 最新情報（${new Date().getFullYear()}年）\n`;
+  let text = `## 最新情報（${new Date().getFullYear()}年・直近3ヶ月）\n`;
 
   if (latestNews.keyInsights) {
     text += `\n### 重要ポイント\n${latestNews.keyInsights}\n`;
@@ -343,10 +463,36 @@ export function formatLatestNewsForPrompt(latestNews) {
     }
   }
 
-  if (latestNews.latestNews?.length > 0) {
-    text += `\n### 最新ニュース\n`;
-    for (const news of latestNews.latestNews) {
+  // 日本語ソースと海外ソースを分けて表示
+  const jaNews = (latestNews.latestNews || []).filter(n => n.region === 'ja');
+  const enNews = (latestNews.latestNews || []).filter(n => n.region === 'en');
+  const otherNews = (latestNews.latestNews || []).filter(n => !n.region || (n.region !== 'ja' && n.region !== 'en'));
+
+  if (jaNews.length > 0) {
+    text += `\n### 国内の最新ニュース\n`;
+    for (const news of jaNews) {
       text += `- **${news.title}**: ${news.detail}`;
+      if (news.source) text += ` [出典: ${news.source}]`;
+      if (news.date) text += ` (${news.date})`;
+      text += `\n`;
+    }
+  }
+
+  if (enNews.length > 0) {
+    text += `\n### 海外の最新ニュース\n`;
+    for (const news of enNews) {
+      text += `- **${news.title}**: ${news.detail}`;
+      if (news.source) text += ` [出典: ${news.source}]`;
+      if (news.date) text += ` (${news.date})`;
+      text += `\n`;
+    }
+  }
+
+  if (otherNews.length > 0) {
+    text += `\n### その他の最新情報\n`;
+    for (const news of otherNews) {
+      text += `- **${news.title}**: ${news.detail}`;
+      if (news.source) text += ` [出典: ${news.source}]`;
       if (news.date) text += ` (${news.date})`;
       text += `\n`;
     }
