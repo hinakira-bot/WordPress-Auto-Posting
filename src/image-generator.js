@@ -10,6 +10,16 @@ const imageModel = genAI.getGenerativeModel({ model: config.gemini.imageModel })
 
 const REF_IMAGES_DIR = resolve(config.paths.data, 'reference-images');
 
+/** タイムアウト付きPromise */
+function withTimeout(promise, ms, label = '画像生成') {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} タイムアウト (${ms / 1000}秒経過)`)), ms)
+    ),
+  ]);
+}
+
 /**
  * 参照画像を読み込み（指定タイプのもの）
  * @param {'eyecatch' | 'diagram'} type
@@ -73,12 +83,16 @@ async function generateImage(prompt, outputPath, referenceImages = [], retries =
         parts.push({ text: prompt });
       }
 
-      const result = await imageModel.generateContent({
-        contents: [{ role: 'user', parts }],
-        generationConfig: {
-          responseModalities: ['image', 'text'],
-        },
-      });
+      const result = await withTimeout(
+        imageModel.generateContent({
+          contents: [{ role: 'user', parts }],
+          generationConfig: {
+            responseModalities: ['image', 'text'],
+          },
+        }),
+        120_000, // 120秒タイムアウト
+        `画像生成 (試行${attempt + 1})`
+      );
 
       const response = result.response;
       const responseParts = response.candidates?.[0]?.content?.parts || [];
