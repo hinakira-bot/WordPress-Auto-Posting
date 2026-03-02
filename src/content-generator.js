@@ -9,6 +9,31 @@ import { applySWELLDecorations, convertToGutenbergBlocks } from './gutenberg-con
 const genAI = new GoogleGenerativeAI(config.gemini.apiKey);
 const textModel = genAI.getGenerativeModel({ model: config.gemini.textModel });
 
+/** タイムアウト付きPromiseラッパー */
+function withTimeout(promise, ms, label = 'API') {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} タイムアウト (${ms / 1000}秒経過)`)), ms)
+    ),
+  ]);
+}
+
+/** Gemini API呼び出し（タイムアウト付き・リトライ1回） */
+async function generateWithRetry(prompt, { timeoutMs = 90_000, label = 'API' } = {}) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const result = await withTimeout(textModel.generateContent(prompt), timeoutMs, label);
+      return result;
+    } catch (err) {
+      logger.warn(`${label} 失敗 (試行${attempt}/2): ${err.message}`);
+      if (attempt === 2) throw err;
+      // 1回目失敗: 5秒待ってリトライ
+      await new Promise(r => setTimeout(r, 5000));
+    }
+  }
+}
+
 /**
  * STEP 1: 検索意図を分析
  */
@@ -21,7 +46,7 @@ async function analyzeSearchIntent(keyword, analysisData, baseVars) {
     analysisData: formatAnalysisForPrompt(analysisData),
   });
 
-  const result = await textModel.generateContent(prompt);
+  const result = await generateWithRetry(prompt, { timeoutMs: 60_000, label: '検索意図分析' });
   const text = result.response.text();
   return parseJSON(text);
 }
@@ -39,7 +64,7 @@ async function generateOutline(keyword, analysisData, searchIntent, baseVars) {
     analysisData: formatAnalysisForPrompt(analysisData),
   });
 
-  const result = await textModel.generateContent(prompt);
+  const result = await generateWithRetry(prompt, { timeoutMs: 60_000, label: '見出し構成' });
   const text = result.response.text();
   return parseJSON(text);
 }
@@ -59,7 +84,7 @@ async function generateTitle(keyword, outline, searchIntent, baseVars) {
     userNeeds: searchIntent.userNeeds,
   });
 
-  const result = await textModel.generateContent(prompt);
+  const result = await generateWithRetry(prompt, { timeoutMs: 60_000, label: 'タイトル生成' });
   const text = result.response.text();
   return parseJSON(text);
 }
@@ -78,7 +103,7 @@ async function generateLead(keyword, title, outline, searchIntent, baseVars) {
     userNeeds: searchIntent.userNeeds,
     targetAudience: baseVars.settingsTargetAudience || searchIntent.targetAudience || '',
   });
-  const result = await textModel.generateContent(prompt);
+  const result = await generateWithRetry(prompt, { timeoutMs: 60_000, label: 'リード文' });
   let leadHtml = result.response.text().replace(/```html\n?/g, '').replace(/```\n?/g, '').trim();
   logger.info(`リード文生成完了: ${leadHtml.length}文字`);
   return leadHtml;
@@ -118,7 +143,7 @@ async function generateBody(keyword, title, outline, searchIntent, baseVars) {
     targetAudience,
   });
 
-  const result = await textModel.generateContent(prompt);
+  const result = await generateWithRetry(prompt, { timeoutMs: 180_000, label: '本文生成' });
   let bodyHtml = result.response.text().replace(/```html\n?/g, '').replace(/```\n?/g, '').trim();
 
   return bodyHtml;
@@ -137,7 +162,7 @@ async function generateSummary(keyword, title, outline, searchIntent, bodyHtml, 
     targetAudience: baseVars.settingsTargetAudience || searchIntent.targetAudience || '',
     bodyPreview: bodyHtml.replace(/<[^>]*>/g, '').slice(0, 1000),
   });
-  const result = await textModel.generateContent(prompt);
+  const result = await generateWithRetry(prompt, { timeoutMs: 90_000, label: 'まとめ文' });
   let summaryHtml = result.response.text().replace(/```html\n?/g, '').replace(/```\n?/g, '').trim();
   logger.info(`まとめ文生成完了: ${summaryHtml.length}文字`);
   return summaryHtml;

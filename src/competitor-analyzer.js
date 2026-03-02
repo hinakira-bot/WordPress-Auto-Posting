@@ -5,6 +5,16 @@ import logger from './logger.js';
 
 const genAI = new GoogleGenerativeAI(config.gemini.apiKey);
 
+/** タイムアウト付きPromiseラッパー */
+function withTimeout(promise, ms, label = 'API') {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} タイムアウト (${ms / 1000}秒経過)`)), ms)
+    ),
+  ]);
+}
+
 /**
  * Gemini + Google Search Grounding で検索意図と競合情報を取得
  */
@@ -41,7 +51,7 @@ async function searchWithGemini(keyword) {
 
 上位5〜10件の記事について分析してください。`;
 
-  const result = await model.generateContent(prompt);
+  const result = await withTimeout(model.generateContent(prompt), 60_000, '競合分析');
   const text = result.response.text();
   return parseJSON(text);
 }
@@ -217,7 +227,7 @@ export async function searchLatestNews(keyword) {
 最新で信頼性の高い情報を5〜10件程度取得してください。`;
 
   try {
-    const result = await model.generateContent(prompt);
+    const result = await withTimeout(model.generateContent(prompt), 60_000, '最新情報検索');
     const text = result.response.text();
     const parsed = parseJSON(text);
     logger.info(`最新情報: ${parsed.latestNews?.length || 0}件取得`);
@@ -267,7 +277,7 @@ export async function searchEvidence(keyword) {
 信頼性の高いエビデンスを3〜7件取得してください。具体的な数値・統計データが含まれるものを優先してください。`;
 
   try {
-    const result = await model.generateContent(prompt);
+    const result = await withTimeout(model.generateContent(prompt), 60_000, 'エビデンス検索');
     const text = result.response.text();
     const parsed = parseJSON(text);
     logger.info(`エビデンス: ${parsed.evidence?.length || 0}件取得`);
