@@ -65,6 +65,7 @@ const config = {
     keywords: resolve(PROJECT_ROOT, 'data', 'keywords.json'),
     postLog: resolve(PROJECT_ROOT, 'data', 'post-log.json'),
     settings: resolve(PROJECT_ROOT, 'data', 'settings.json'),
+    checkpoint: resolve(PROJECT_ROOT, 'data', 'pipeline-checkpoint.json'),
     knowledge: resolve(PROJECT_ROOT, 'knowledge'),
     prompts: resolve(PROJECT_ROOT, 'prompts'),
     promptDefaults: resolve(PROJECT_ROOT, 'prompts', 'defaults'),

@@ -1,12 +1,20 @@
 import { NextResponse } from 'next/server';
-import { startPipeline, getStatus, resetPipeline } from '@/lib/pipeline-runner.js';
+import { startPipeline, getStatus, resetPipeline, getCheckpointInfo } from '@/lib/pipeline-runner.js';
 
 /** POST /api/pipeline — パイプライン実行開始 */
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { dryRun = false, keywordId } = body;
+    const { action, dryRun = false, keywordId } = body;
 
+    // アクション分岐
+    if (action === 'resume') {
+      // チェックポイントからレジューム
+      await startPipeline({ dryRun, resume: true });
+      return NextResponse.json({ success: true, message: 'レジューム開始' });
+    }
+
+    // 通常の実行開始
     await startPipeline({ dryRun, keywordId });
     return NextResponse.json({ success: true, message: 'パイプライン開始' });
   } catch (err) {
@@ -15,8 +23,20 @@ export async function POST(request) {
 }
 
 /** GET /api/pipeline — 現在の実行状態取得 */
-export async function GET() {
+export async function GET(request) {
   try {
+    const { searchParams } = new URL(request.url);
+    const query = searchParams.get('q');
+
+    // チェックポイント情報の取得
+    if (query === 'checkpoint') {
+      const info = getCheckpointInfo();
+      return NextResponse.json({
+        hasCheckpoint: !!info,
+        checkpoint: info,
+      });
+    }
+
     const status = getStatus();
     return NextResponse.json(status);
   } catch (err) {

@@ -6,6 +6,7 @@ import { postToWordPress } from './wordpress-poster.js';
 import { logPost, getArticleIndexForPrompt } from './post-logger.js';
 import { loadAllKnowledge } from './knowledge-manager.js';
 import { getSetting } from './settings-manager.js';
+import { saveCheckpoint, loadCheckpoint, deleteCheckpoint } from './checkpoint-manager.js';
 import config from './config.js';
 import logger from './logger.js';
 
@@ -18,6 +19,7 @@ import logger from './logger.js';
  * @param {boolean} [options.dryRun] - ドライランモード
  * @param {string} [options.keyword] - 特定キーワードを指定（キーワード文字列）
  * @param {string} [options.keywordId] - 特定キーワードをIDで指定
+ * @param {boolean} [options.resume] - チェックポイントからレジューム
  * @param {Function} [options.onProgress] - 進捗コールバック ({step, message, progress, keyword, title})
  */
 export async function runPipeline(options = {}) {
@@ -26,128 +28,213 @@ export async function runPipeline(options = {}) {
   const onProgress = options.onProgress;
 
   try {
-    // === STEP 0: キーワード取得 ===
-    onProgress?.({ step: 'keyword', message: 'キーワード取得中...', progress: 0 });
-    logger.info('========================================');
-    logger.info('  WordPress 自動投稿パイプライン開始');
-    logger.info('========================================');
-
-    let keywordData;
-    if (options.keywordId) {
-      // IDで特定のキーワードを指定
-      keywordData = getKeywordById(options.keywordId);
-      if (!keywordData) {
-        logger.warn(`指定されたキーワードが見つかりません: ${options.keywordId}`);
-        return { success: false, reason: 'keyword_not_found' };
+    // === レジュームモード判定 ===
+    let checkpoint = null;
+    if (options.resume) {
+      checkpoint = loadCheckpoint();
+      if (checkpoint) {
+        logger.info('========================================');
+        logger.info(`  チェックポイントからレジューム (step: ${checkpoint.step})`);
+        logger.info('========================================');
+        onProgress?.({ step: 'keyword', message: `レジューム: ${checkpoint.stepLabel || checkpoint.step}から再開`, progress: 5, keyword: checkpoint.keyword });
+      } else {
+        logger.info('チェックポイントが見つかりません。通常実行にフォールバック。');
+        onProgress?.({ step: 'keyword', message: 'チェックポイントなし。通常実行します。', progress: 0 });
       }
-      logger.info(`指定キーワードで実行: "${keywordData.keyword || keywordData.description?.slice(0, 30)}"`);
-    } else {
-      keywordData = getNextKeyword();
-    }
-    if (!keywordData) {
-      logger.warn('未投稿キーワードがありません。終了します。');
-      return { success: false, reason: 'no_keywords' };
     }
 
-    const keyword = keywordData.keyword || '';
-    const description = keywordData.description || '';
+    // === レジューム時: チェックポイントからデータ復元 ===
+    let keywordData, keyword, description, mode, displayLabel;
+    let knowledge, analysisData, latestNews, evidenceData, existingArticles;
+    let article, imageFiles;
 
-    // モード判定
-    const mode = keyword && description ? 'both'
-      : keyword ? 'keyword-only'
-      : 'description-only';
+    if (checkpoint) {
+      // チェックポイントから基本データを復元
+      keywordData = checkpoint.keywordData;
+      keyword = checkpoint.keyword || '';
+      description = checkpoint.description || '';
+      mode = checkpoint.mode || 'keyword-only';
+      displayLabel = keyword || description.slice(0, 40);
 
-    const displayLabel = keyword || description.slice(0, 40);
-    logger.info(`対象: "${displayLabel}"`);
-    logger.info(`モード: ${mode}`);
-    if (description) logger.info(`説明: "${description.slice(0, 60)}..."`);
+      // 各ステップのデータも復元
+      knowledge = checkpoint.knowledge || null;
+      analysisData = checkpoint.analysisData || null;
+      latestNews = checkpoint.latestNews || null;
+      evidenceData = checkpoint.evidenceData || null;
+      existingArticles = checkpoint.existingArticles || null;
 
-    onProgress?.({ step: 'keyword', message: `対象: "${displayLabel}"`, progress: 5, keyword: displayLabel });
+      if (checkpoint.step === 'article-done' || checkpoint.step === 'images-done') {
+        article = checkpoint.article;
+      }
+      if (checkpoint.step === 'images-done') {
+        imageFiles = checkpoint.imageFiles;
+      }
 
-    // === STEP 0.5: ナレッジ読み込み ===
-    onProgress?.({ step: 'knowledge', message: 'ナレッジ読み込み中...', progress: 10 });
-    logger.info('--- ナレッジ読み込み ---');
-    const knowledge = await loadAllKnowledge();
-    if (knowledge) {
-      logger.info(`ナレッジ: ${knowledge.length}文字 読み込み済み`);
-      onProgress?.({ message: `ナレッジ: ${knowledge.length}文字 読み込み済み` });
-    } else {
-      logger.info('ナレッジ: なし');
+      onProgress?.({ step: 'keyword', message: `対象: "${displayLabel}"`, progress: 5, keyword: displayLabel });
+
+      // チェックポイントのステップに応じてスキップ
+      if (checkpoint.step === 'analysis-done') {
+        logger.info('レジューム: 調査データ復元済み → 記事生成から再開');
+        onProgress?.({ message: '調査データ復元済み → 記事生成から再開', progress: 36 });
+      } else if (checkpoint.step === 'article-done') {
+        logger.info('レジューム: 記事データ復元済み → 画像生成から再開');
+        onProgress?.({ message: `記事データ復元済み → 画像生成から再開`, progress: 60, title: article?.title });
+      } else if (checkpoint.step === 'images-done') {
+        logger.info('レジューム: 画像データ復元済み → WordPress投稿から再開');
+        onProgress?.({ message: `画像データ復元済み → WordPress投稿から再開`, progress: 80, title: article?.title });
+      }
     }
 
-    // === STEP 1: 競合分析 ===
-    let analysisData = null;
-    if (keyword) {
-      onProgress?.({ step: 'analysis', message: '競合分析中...', progress: 15 });
-      logger.info('--- STEP 1: 競合分析 ---');
-      analysisData = await analyzeCompetitors(keyword);
-      onProgress?.({ message: '競合分析完了', progress: 30 });
-    } else {
-      logger.info('--- STEP 1: 競合分析スキップ (説明のみモード) ---');
-      onProgress?.({ step: 'analysis', message: '競合分析スキップ (説明のみモード)', progress: 30 });
-      analysisData = {
-        keyword: '',
-        searchResults: [],
-        articles: [],
-        summary: {
+    // === 通常実行（レジュームでないか、チェックポイントがない場合） ===
+    if (!checkpoint) {
+      // === STEP 0: キーワード取得 ===
+      onProgress?.({ step: 'keyword', message: 'キーワード取得中...', progress: 0 });
+      logger.info('========================================');
+      logger.info('  WordPress 自動投稿パイプライン開始');
+      logger.info('========================================');
+
+      if (options.keywordId) {
+        keywordData = getKeywordById(options.keywordId);
+        if (!keywordData) {
+          logger.warn(`指定されたキーワードが見つかりません: ${options.keywordId}`);
+          return { success: false, reason: 'keyword_not_found' };
+        }
+        logger.info(`指定キーワードで実行: "${keywordData.keyword || keywordData.description?.slice(0, 30)}"`);
+      } else {
+        keywordData = getNextKeyword();
+      }
+      if (!keywordData) {
+        logger.warn('未投稿キーワードがありません。終了します。');
+        return { success: false, reason: 'no_keywords' };
+      }
+
+      keyword = keywordData.keyword || '';
+      description = keywordData.description || '';
+      mode = keyword && description ? 'both'
+        : keyword ? 'keyword-only'
+        : 'description-only';
+      displayLabel = keyword || description.slice(0, 40);
+
+      logger.info(`対象: "${displayLabel}"`);
+      logger.info(`モード: ${mode}`);
+      if (description) logger.info(`説明: "${description.slice(0, 60)}..."`);
+      onProgress?.({ step: 'keyword', message: `対象: "${displayLabel}"`, progress: 5, keyword: displayLabel });
+    }
+
+    // === STEP 0.5〜1.7: 調査フェーズ（レジュームでスキップ可能） ===
+    if (!checkpoint || checkpoint.step === 'none') {
+      // === STEP 0.5: ナレッジ読み込み ===
+      onProgress?.({ step: 'knowledge', message: 'ナレッジ読み込み中...', progress: 10 });
+      logger.info('--- ナレッジ読み込み ---');
+      knowledge = await loadAllKnowledge();
+      if (knowledge) {
+        logger.info(`ナレッジ: ${knowledge.length}文字 読み込み済み`);
+        onProgress?.({ message: `ナレッジ: ${knowledge.length}文字 読み込み済み` });
+      } else {
+        logger.info('ナレッジ: なし');
+      }
+
+      // === STEP 1: 競合分析 ===
+      analysisData = null;
+      if (keyword) {
+        onProgress?.({ step: 'analysis', message: '競合分析中...', progress: 15 });
+        logger.info('--- STEP 1: 競合分析 ---');
+        analysisData = await analyzeCompetitors(keyword);
+        onProgress?.({ message: '競合分析完了', progress: 30 });
+      } else {
+        logger.info('--- STEP 1: 競合分析スキップ (説明のみモード) ---');
+        onProgress?.({ step: 'analysis', message: '競合分析スキップ (説明のみモード)', progress: 30 });
+        analysisData = {
           keyword: '',
-          totalArticles: 0,
-          avgCharCount: 0,
-          commonH2Count: 0,
-          searchIntent: 'informational',
-          commonTopics: [],
-          topHeadings: [],
-        },
-      };
+          searchResults: [],
+          articles: [],
+          summary: {
+            keyword: '',
+            totalArticles: 0,
+            avgCharCount: 0,
+            commonH2Count: 0,
+            searchIntent: 'informational',
+            commonTopics: [],
+            topHeadings: [],
+          },
+        };
+      }
+
+      // === STEP 1.5: 最新情報検索 ===
+      latestNews = null;
+      if (keyword) {
+        onProgress?.({ step: 'analysis', message: '最新情報を検索中...', progress: 28 });
+        logger.info('--- STEP 1.5: 最新情報検索 ---');
+        latestNews = await searchLatestNews(keyword);
+        const newsCount = latestNews?.latestNews?.length || 0;
+        logger.info(`最新情報: ${newsCount}件取得`);
+        onProgress?.({ message: `最新情報: ${newsCount}件取得`, progress: 32 });
+      }
+
+      // === STEP 1.6: エビデンス調査（論文・公的文書・統計） ===
+      evidenceData = null;
+      if (keyword) {
+        onProgress?.({ step: 'analysis', message: 'エビデンス情報を検索中...', progress: 33 });
+        logger.info('--- STEP 1.6: エビデンス調査 ---');
+        evidenceData = await searchEvidence(keyword);
+        const evidenceCount = evidenceData?.evidence?.length || 0;
+        logger.info(`エビデンス: ${evidenceCount}件取得`);
+        onProgress?.({ message: `エビデンス: ${evidenceCount}件取得`, progress: 36 });
+      }
+
+      // === STEP 1.7: 投稿済み記事インデックス取得（内部リンク用） ===
+      existingArticles = getArticleIndexForPrompt();
+      if (existingArticles) {
+        logger.info(`内部リンク用記事インデックス: ${existingArticles.split('\n').length - 1}件`);
+      }
+
+      // チェックポイント保存: 調査完了
+      saveCheckpoint({
+        step: 'analysis-done',
+        keywordData, keyword, description, mode, dryRun,
+        knowledge, analysisData, latestNews, evidenceData, existingArticles,
+      });
     }
 
-    // === STEP 1.5: 最新情報検索 ===
-    let latestNews = null;
-    if (keyword) {
-      onProgress?.({ step: 'analysis', message: '最新情報を検索中...', progress: 28 });
-      logger.info('--- STEP 1.5: 最新情報検索 ---');
-      latestNews = await searchLatestNews(keyword);
-      const newsCount = latestNews?.latestNews?.length || 0;
-      logger.info(`最新情報: ${newsCount}件取得`);
-      onProgress?.({ message: `最新情報: ${newsCount}件取得`, progress: 32 });
+    // === STEP 2: 記事生成（レジュームでスキップ可能） ===
+    if (!checkpoint || checkpoint.step === 'analysis-done') {
+      onProgress?.({ step: 'content', message: '記事生成中...', progress: 38 });
+      logger.info('--- STEP 2: 記事生成 ---');
+      article = await generateArticle(keyword, analysisData, {
+        description,
+        knowledge,
+        latestNews,
+        evidence: evidenceData,
+        mode,
+        existingArticles,
+        onProgress,
+      });
+      onProgress?.({ message: `記事生成完了: ${article.title}`, progress: 60, title: article.title });
+
+      // チェックポイント保存: 記事生成完了
+      saveCheckpoint({
+        step: 'article-done',
+        keywordData, keyword, description, mode, dryRun,
+        knowledge, analysisData, latestNews, evidenceData, existingArticles,
+        article,
+      });
     }
 
-    // === STEP 1.6: エビデンス調査（論文・公的文書・統計） ===
-    let evidenceData = null;
-    if (keyword) {
-      onProgress?.({ step: 'analysis', message: 'エビデンス情報を検索中...', progress: 33 });
-      logger.info('--- STEP 1.6: エビデンス調査 ---');
-      evidenceData = await searchEvidence(keyword);
-      const evidenceCount = evidenceData?.evidence?.length || 0;
-      logger.info(`エビデンス: ${evidenceCount}件取得`);
-      onProgress?.({ message: `エビデンス: ${evidenceCount}件取得`, progress: 36 });
+    // === STEP 3: 画像生成（レジュームでスキップ可能） ===
+    if (!checkpoint || checkpoint.step === 'analysis-done' || checkpoint.step === 'article-done') {
+      onProgress?.({ step: 'image', message: '画像生成中...', progress: 65 });
+      logger.info('--- STEP 3: 画像生成 ---');
+      imageFiles = await generateAllImages(article);
+      onProgress?.({ message: '画像生成完了', progress: 80 });
+
+      // チェックポイント保存: 画像生成完了
+      saveCheckpoint({
+        step: 'images-done',
+        keywordData, keyword, description, mode, dryRun,
+        knowledge, analysisData, latestNews, evidenceData, existingArticles,
+        article, imageFiles,
+      });
     }
-
-    // === STEP 1.7: 投稿済み記事インデックス取得（内部リンク用） ===
-    const existingArticles = getArticleIndexForPrompt();
-    if (existingArticles) {
-      logger.info(`内部リンク用記事インデックス: ${existingArticles.split('\n').length - 1}件`);
-    }
-
-    // === STEP 2: 記事生成（description + knowledge + latestNews + evidence + existingArticles を渡す） ===
-    onProgress?.({ step: 'content', message: '記事生成中...', progress: 38 });
-    logger.info('--- STEP 2: 記事生成 ---');
-    const article = await generateArticle(keyword, analysisData, {
-      description,
-      knowledge,
-      latestNews,
-      evidence: evidenceData,
-      mode,
-      existingArticles,
-      onProgress,
-    });
-    onProgress?.({ message: `記事生成完了: ${article.title}`, progress: 60, title: article.title });
-
-    // === STEP 3: 画像生成 ===
-    onProgress?.({ step: 'image', message: '画像生成中...', progress: 65 });
-    logger.info('--- STEP 3: 画像生成 ---');
-    const imageFiles = await generateAllImages(article);
-    onProgress?.({ message: '画像生成完了', progress: 80 });
 
     // === STEP 4: 投稿 ===
     onProgress?.({ step: 'posting', message: 'WordPress投稿中...', progress: 85 });
@@ -186,6 +273,8 @@ export async function runPipeline(options = {}) {
     const elapsed = Math.round((Date.now() - startTime) / 1000);
 
     if (postResult.success) {
+      // 成功時はチェックポイントを削除
+      deleteCheckpoint();
       markAsPosted(keyword || keywordData.id, postResult.url || '');
       logPost({
         keyword: keyword || description.slice(0, 40),
@@ -232,11 +321,18 @@ export async function runPipeline(options = {}) {
     logger.error(err.stack);
     onProgress?.({ step: 'error', message: `エラー: ${err.message}`, progress: 0 });
 
+    // 明示的エラー時はチェックポイントを削除しない（レジュームで再利用可能にする）
+    // ※ プロセスクラッシュ時もチェックポイントは残る
+
     // キーワードが取得できていた場合は失敗マーク
     try {
-      const keywordData = getNextKeyword();
-      if (keywordData) {
-        markAsFailed(keywordData.keyword || keywordData.id, err.message);
+      if (keyword) {
+        markAsFailed(keyword || keywordData?.id, err.message);
+      } else {
+        const kw = getNextKeyword();
+        if (kw) {
+          markAsFailed(kw.keyword || kw.id, err.message);
+        }
       }
     } catch { /* ignore */ }
 

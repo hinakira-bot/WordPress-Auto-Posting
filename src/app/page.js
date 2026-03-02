@@ -16,11 +16,13 @@ export default function Dashboard() {
   const [pipelineRunning, setPipelineRunning] = useState(false);
   const [showProgress, setShowProgress] = useState(false);
   const [execError, setExecError] = useState('');
+  const [checkpointInfo, setCheckpointInfo] = useState(null);
 
   useEffect(() => {
     fetchData();
     fetchKeywords();
     checkPipelineStatus();
+    fetchCheckpointInfo();
   }, []);
 
   const fetchData = async () => {
@@ -57,6 +59,41 @@ export default function Dashboard() {
     } catch { /* ignore */ }
   };
 
+  const fetchCheckpointInfo = async () => {
+    try {
+      const res = await fetch('/api/pipeline?q=checkpoint');
+      const data = await res.json();
+      if (data.hasCheckpoint) {
+        setCheckpointInfo(data.checkpoint);
+      } else {
+        setCheckpointInfo(null);
+      }
+    } catch { /* ignore */ }
+  };
+
+  const handleResumePipeline = async () => {
+    setExecError('');
+    try {
+      const res = await fetch('/api/pipeline', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'resume' }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setExecError(data.error || 'レジュームエラー');
+        return;
+      }
+
+      setPipelineRunning(true);
+      setShowProgress(true);
+      setCheckpointInfo(null);
+    } catch (err) {
+      setExecError(err.message);
+    }
+  };
+
   const handleRunPipeline = async () => {
     setExecError('');
     try {
@@ -90,6 +127,7 @@ export default function Dashboard() {
     // データを再読み込み
     fetchData();
     fetchKeywords();
+    fetchCheckpointInfo();
   };
 
   if (loading) {
@@ -173,6 +211,31 @@ export default function Dashboard() {
                   <p className="text-sm text-red-600">{execError}</p>
                 )}
               </div>
+
+              {/* チェックポイントからレジューム */}
+              {checkpointInfo && !pipelineRunning && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <svg className="w-5 h-5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                    </svg>
+                    <span className="text-sm font-medium text-amber-800">
+                      前回の実行が中断されています
+                    </span>
+                  </div>
+                  <p className="text-xs text-amber-700 mb-3">
+                    {checkpointInfo.keyword && `キーワード: "${checkpointInfo.keyword}" / `}
+                    {checkpointInfo.stepLabel || checkpointInfo.step}まで完了
+                    {checkpointInfo.savedAt && ` (${new Date(checkpointInfo.savedAt).toLocaleString('ja-JP')})`}
+                  </p>
+                  <button
+                    onClick={handleResumePipeline}
+                    className="px-4 py-2 bg-amber-500 text-white text-sm font-medium rounded-lg hover:bg-amber-600 transition-colors cursor-pointer"
+                  >
+                    前回の続きから再開
+                  </button>
+                </div>
+              )}
 
               <p className="text-xs text-gray-500">
                 ※ 実行には数分かかります（競合分析 → 記事生成 → 画像生成 → 投稿）

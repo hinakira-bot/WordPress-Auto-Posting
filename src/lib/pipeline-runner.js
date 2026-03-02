@@ -2,6 +2,7 @@
  * パイプライン実行管理シングルトン
  * Web UIからのパイプライン実行を管理し、SSEクライアントに進捗をブロードキャストする
  */
+import { getCheckpointSummary } from '../checkpoint-manager.js';
 
 // グローバルシングルトン（Next.js HMRでも維持）
 const globalKey = Symbol.for('pipeline-runner');
@@ -54,6 +55,15 @@ function onProgress({ step, message, progress, keyword, title }) {
   broadcast({ type: 'progress' });
 }
 
+/** チェックポイント情報を取得（UI用） */
+export function getCheckpointInfo() {
+  try {
+    return getCheckpointSummary();
+  } catch {
+    return null;
+  }
+}
+
 /** パイプラインを開始 */
 export async function startPipeline(options = {}) {
   if (state.running) {
@@ -81,7 +91,8 @@ export async function startPipeline(options = {}) {
 
   const modeLabel = options.dryRun ? 'ドライラン' : '本番';
   const kwLabel = options.keywordId ? ' / キーワード指定' : '';
-  addLog('info', `パイプライン開始 (${modeLabel}${kwLabel})`);
+  const resumeLabel = options.resume ? ' / レジューム' : '';
+  addLog('info', `パイプライン開始 (${modeLabel}${kwLabel}${resumeLabel})`);
   broadcast({ type: 'started' });
 
   // 非同期で実行（呼び出し元はawaitしない）
