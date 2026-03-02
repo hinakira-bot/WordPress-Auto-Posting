@@ -33,6 +33,13 @@
 {{latestNews}}
 {{/if}}
 
+{{#if evidence}}
+## エビデンス・出典情報
+以下は信頼性の高い学術研究・公的統計・専門機関の資料から得られた情報です。記事内で具体的な数値・調査結果・出典名に言及して記事の信頼性・権威性を高めてください。出典は `<a href="URL" target="_blank">出典名</a>` のテキストリンクで挿入してください。
+
+{{evidence}}
+{{/if}}
+
 {{#if existingArticles}}
 ## 内部リンク用 既存記事一覧
 {{existingArticles}}

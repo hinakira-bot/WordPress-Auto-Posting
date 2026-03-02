@@ -2,7 +2,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import config from './config.js';
 import logger from './logger.js';
 import { loadPrompt, renderPrompt } from './prompt-manager.js';
-import { formatAnalysisForPrompt, formatLatestNewsForPrompt } from './competitor-analyzer.js';
+import { formatAnalysisForPrompt, formatLatestNewsForPrompt, formatEvidenceForPrompt } from './competitor-analyzer.js';
 import { getSetting } from './settings-manager.js';
 import { applySWELLDecorations, convertToGutenbergBlocks } from './gutenberg-converter.js';
 
@@ -299,13 +299,19 @@ function convertPlainUrlsToLinks(html) {
  * @param {object} context - {description, knowledge, latestNews, mode}
  */
 export async function generateArticle(keyword, analysisData, context = {}) {
-  const { description = '', knowledge = '', latestNews = null, mode = 'keyword-only', existingArticles = '' } = context;
+  const { description = '', knowledge = '', latestNews = null, evidence = null, mode = 'keyword-only', existingArticles = '' } = context;
   logger.info(`=== 記事生成開始: "${keyword || description.slice(0, 30)}" (${mode}) ===`);
 
   // 最新情報をテキスト化
   const latestNewsText = latestNews ? formatLatestNewsForPrompt(latestNews) : '';
   if (latestNewsText) {
     logger.info(`最新情報をプロンプトに反映: ${latestNewsText.length}文字`);
+  }
+
+  // エビデンス情報をテキスト化
+  const evidenceText = evidence ? formatEvidenceForPrompt(evidence) : '';
+  if (evidenceText) {
+    logger.info(`エビデンス情報をプロンプトに反映: ${evidenceText.length}文字`);
   }
 
   // 設定からターゲット読者を取得
@@ -317,6 +323,7 @@ export async function generateArticle(keyword, analysisData, context = {}) {
     description,
     knowledge,
     latestNews: latestNewsText,
+    evidence: evidenceText,
     existingArticles,
     minLength: String(config.posting.minLength),
     maxLength: String(config.posting.maxLength),

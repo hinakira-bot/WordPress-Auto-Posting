@@ -1,5 +1,5 @@
 import { getNextKeyword, getKeywordById, markAsPosted, markAsFailed } from './keyword-manager.js';
-import { analyzeCompetitors, searchLatestNews } from './competitor-analyzer.js';
+import { analyzeCompetitors, searchLatestNews, searchEvidence } from './competitor-analyzer.js';
 import { generateArticle } from './content-generator.js';
 import { generateAllImages } from './image-generator.js';
 import { postToWordPress } from './wordpress-poster.js';
@@ -112,19 +112,31 @@ export async function runPipeline(options = {}) {
       onProgress?.({ message: `最新情報: ${newsCount}件取得`, progress: 32 });
     }
 
+    // === STEP 1.6: エビデンス調査（論文・公的文書・統計） ===
+    let evidenceData = null;
+    if (keyword) {
+      onProgress?.({ step: 'analysis', message: 'エビデンス情報を検索中...', progress: 33 });
+      logger.info('--- STEP 1.6: エビデンス調査 ---');
+      evidenceData = await searchEvidence(keyword);
+      const evidenceCount = evidenceData?.evidence?.length || 0;
+      logger.info(`エビデンス: ${evidenceCount}件取得`);
+      onProgress?.({ message: `エビデンス: ${evidenceCount}件取得`, progress: 36 });
+    }
+
     // === STEP 1.7: 投稿済み記事インデックス取得（内部リンク用） ===
     const existingArticles = getArticleIndexForPrompt();
     if (existingArticles) {
       logger.info(`内部リンク用記事インデックス: ${existingArticles.split('\n').length - 1}件`);
     }
 
-    // === STEP 2: 記事生成（description + knowledge + latestNews + existingArticles を渡す） ===
-    onProgress?.({ step: 'content', message: '記事生成中...', progress: 35 });
+    // === STEP 2: 記事生成（description + knowledge + latestNews + evidence + existingArticles を渡す） ===
+    onProgress?.({ step: 'content', message: '記事生成中...', progress: 38 });
     logger.info('--- STEP 2: 記事生成 ---');
     const article = await generateArticle(keyword, analysisData, {
       description,
       knowledge,
       latestNews,
+      evidence: evidenceData,
       mode,
       existingArticles,
     });

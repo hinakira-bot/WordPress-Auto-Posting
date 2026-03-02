@@ -229,6 +229,90 @@ export async function searchLatestNews(keyword) {
 }
 
 /**
+ * Gemini + Google Search Grounding でエビデンス（論文・公的文書・統計）を取得
+ */
+export async function searchEvidence(keyword) {
+  logger.info(`エビデンス情報を検索中: "${keyword}"`);
+
+  const model = genAI.getGenerativeModel({
+    model: config.gemini.textModel,
+    tools: [{ googleSearch: {} }],
+  });
+
+  const prompt = `以下のキーワードに関する、記事の根拠・信頼性を高めるエビデンス情報を調査してください。
+
+キーワード: "${keyword}"
+
+以下の情報源を重点的に検索してください：
+- 学術論文・研究報告（大学、研究機関の調査結果）
+- 公的統計・政府発表（総務省、経産省、厚労省、内閣府、文科省等の統計・白書）
+- 業界団体・専門機関の調査報告やレポート
+- 国際機関のデータや報告（WHO、OECD、World Bank等）
+- 信頼性の高い調査会社のレポート（Gartner、IDC、矢野経済研究所等）
+
+以下のJSON形式で出力してください。JSON以外のテキストは不要です。
+{
+  "evidence": [
+    {
+      "title": "エビデンスのタイトル・名称",
+      "type": "research|government|industry|international",
+      "detail": "具体的な内容・数値データ",
+      "source": "情報源（機関名・URL）",
+      "year": "発表年"
+    }
+  ],
+  "keyFindings": "記事に盛り込むべき重要な発見や合意事項の要約（200字以内）"
+}
+
+信頼性の高いエビデンスを3〜7件取得してください。具体的な数値・統計データが含まれるものを優先してください。`;
+
+  try {
+    const result = await model.generateContent(prompt);
+    const text = result.response.text();
+    const parsed = parseJSON(text);
+    logger.info(`エビデンス: ${parsed.evidence?.length || 0}件取得`);
+    return parsed;
+  } catch (err) {
+    logger.warn(`エビデンス検索エラー: ${err.message}`);
+    return { evidence: [], keyFindings: '' };
+  }
+}
+
+/**
+ * エビデンス情報をプロンプト用テキストに変換
+ */
+export function formatEvidenceForPrompt(evidence) {
+  if (!evidence || (!evidence.evidence?.length && !evidence.keyFindings)) {
+    return '';
+  }
+
+  let text = `## エビデンス・出典情報\n`;
+
+  if (evidence.keyFindings) {
+    text += `\n### 重要な知見\n${evidence.keyFindings}\n`;
+  }
+
+  if (evidence.evidence?.length > 0) {
+    text += `\n### 根拠データ・研究結果\n`;
+    const typeLabels = {
+      research: '学術研究',
+      government: '公的統計',
+      industry: '業界レポート',
+      international: '国際機関',
+    };
+    for (const ev of evidence.evidence) {
+      const typeLabel = typeLabels[ev.type] || '参考資料';
+      text += `- 【${typeLabel}】**${ev.title}**: ${ev.detail}`;
+      if (ev.source) text += ` (出典: ${ev.source})`;
+      if (ev.year) text += ` [${ev.year}年]`;
+      text += `\n`;
+    }
+  }
+
+  return text;
+}
+
+/**
  * 最新情報をプロンプト用テキストに変換
  */
 export function formatLatestNewsForPrompt(latestNews) {
