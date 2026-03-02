@@ -602,8 +602,9 @@ export function convertToGutenbergBlocks(html, settings = {}) {
           `${open}\n<figure class="wp-block-table">${trimmed}</figure>\n${close}`
         );
       } else if (tag === 'figure' && /wp-block-image/i.test(trimmed)) {
-        // 図解画像: h2直下のため上余白なし・下余白あり
-        result.push(`<!-- wp:image {"style":{"spacing":{"margin":{"top":"0","bottom":"var:preset|spacing|40"}}}} -->\n${trimmed}\n<!-- /wp:image -->`);
+        // 図解画像: h2直下のため上余白なし + 画像下にスペーサー挿入
+        result.push(`<!-- wp:image {"style":{"spacing":{"margin":{"top":"0","bottom":"0"}}}} -->\n${trimmed}\n<!-- /wp:image -->`);
+        result.push(`<!-- wp:spacer {"height":"30px"} -->\n<div style="height:30px" aria-hidden="true" class="wp-block-spacer"></div>\n<!-- /wp:spacer -->`);
       } else {
         result.push(`${open}\n${trimmed}\n${close}`);
       }
