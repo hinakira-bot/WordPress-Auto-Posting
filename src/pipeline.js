@@ -174,7 +174,7 @@ export async function runPipeline(options = {}) {
         logger.info(`ハッシュタグ設定: ${hashtags}`);
       }
 
-      postResult = await postToWordPress(article, imageFiles, { hashtags });
+      postResult = await postToWordPress(article, imageFiles, { hashtags, onProgress });
       if (postResult.success) {
         onProgress?.({ message: '投稿完了', progress: 95 });
       } else {

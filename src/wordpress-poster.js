@@ -548,6 +548,7 @@ async function generateSlug(keyword, title) {
 
 export async function postToWordPress(article, imageFiles, options = {}) {
   const startTime = Date.now();
+  const onProgress = options.onProgress;
 
   logger.info('========================================');
   logger.info('  WordPress REST API 投稿処理開始');
@@ -578,6 +579,7 @@ export async function postToWordPress(article, imageFiles, options = {}) {
 
     if (imageFiles?.eyecatchPath) {
       logger.info('--- アイキャッチ画像アップロード ---');
+      onProgress?.({ message: 'アイキャッチ画像をアップロード中...' });
       try {
         const eyecatchResult = await uploadMedia(
           imageFiles.eyecatchPath,
@@ -598,6 +600,7 @@ export async function postToWordPress(article, imageFiles, options = {}) {
 
     if (imageFiles?.diagrams && imageFiles.diagrams.length > 0) {
       logger.info('--- 図解画像アップロード ---');
+      const totalDiagrams = imageFiles.diagrams.filter(d => d.imagePath).length;
 
       for (let i = 0; i < imageFiles.diagrams.length; i++) {
         const diagram = imageFiles.diagrams[i];
@@ -609,6 +612,8 @@ export async function postToWordPress(article, imageFiles, options = {}) {
         }
 
         try {
+          const uploadedSoFar = uploadedDiagrams.filter(d => d !== null).length;
+          onProgress?.({ message: `図解画像をアップロード中... (${uploadedSoFar + 1}/${totalDiagrams})` });
           const altText = diagram.h2 || `diagram-${i}`;
           const result = await uploadMedia(diagram.imagePath, altText);
           uploadedDiagrams.push(result);
@@ -628,6 +633,7 @@ export async function postToWordPress(article, imageFiles, options = {}) {
 
     if (imageFiles?.diagrams && uploadedDiagrams.length > 0) {
       logger.info('--- 図解をHTML本文に埋め込み ---');
+      onProgress?.({ message: '図解を本文に埋め込み中...' });
       finalHtml = embedDiagramImages(finalHtml, imageFiles.diagrams, uploadedDiagrams);
     }
 
@@ -651,6 +657,7 @@ export async function postToWordPress(article, imageFiles, options = {}) {
 
     // --- Step 5: Create post ---
     logger.info('--- WordPress投稿作成 ---');
+    onProgress?.({ message: 'スラッグ（URL）を生成中...' });
 
     // スラッグ（パーマリンク）生成
     const slug = options.slug || await generateSlug(article.keyword, article.title);
@@ -679,6 +686,7 @@ export async function postToWordPress(article, imageFiles, options = {}) {
     }
 
     logger.info(`投稿データ: title="${article.title}", slug="${slug || '(自動)'}", tags=${tagIds.length}件, categories=${categoryIds.length}件, featured_media=${featuredMediaId || 'なし'}`);
+    onProgress?.({ message: 'WordPressに記事を公開中...' });
 
     const post = await wpFetchJSON('/posts', {
       method: 'POST',
