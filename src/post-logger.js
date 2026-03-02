@@ -1,7 +1,9 @@
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import config from './config.js';
+import logger from './logger.js';
 
 const LOG_PATH = config.paths.postLog;
+const KEYWORDS_PATH = config.paths.keywords;
 
 function loadLog() {
   if (!existsSync(LOG_PATH)) {
@@ -27,14 +29,42 @@ export function getPostLog() {
 }
 
 /**
+ * キーワード一覧からアクティブなキーワードセットを取得
+ * （keyword-manager.jsを直接importすると循環参照の恐れがあるため、ファイル直読み）
+ */
+function getActiveKeywords() {
+  try {
+    if (!existsSync(KEYWORDS_PATH)) return null;
+    const data = JSON.parse(readFileSync(KEYWORDS_PATH, 'utf-8'));
+    // keywords.jsonに存在するキーワード文字列のSetを返す
+    return new Set(data.keywords.map(k => k.keyword).filter(Boolean));
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 投稿済み記事のインデックスを取得（内部リンク用）
  * 成功した投稿のみ、keyword / title / url / slug を返す
+ * キーワード一覧から削除されたものは除外する
  * @returns {Array<{keyword: string, title: string, url: string, slug: string}>}
  */
 export function getArticleIndex() {
   const posts = loadLog().posts;
+  const activeKeywords = getActiveKeywords();
+
   return posts
-    .filter(p => p.url && !p.error && !p.dryRun)
+    .filter(p => {
+      if (!p.url || p.error || p.dryRun) return false;
+      // キーワード一覧が読めた場合、削除済みキーワードを除外
+      if (activeKeywords && p.keyword) {
+        if (!activeKeywords.has(p.keyword)) {
+          logger.info(`内部リンク候補から除外（キーワード削除済み）: "${p.keyword}"`);
+          return false;
+        }
+      }
+      return true;
+    })
     .map(p => ({
       keyword: p.keyword || '',
       title: p.title || '',

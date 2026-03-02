@@ -281,6 +281,110 @@ function insertCTA(html) {
 }
 
 /**
+ * 外部リンクのURL存在チェック
+ * 死リンク（404, タイムアウト, DNS失敗等）はリンクを解除してテキストのみ残す
+ */
+async function validateExternalLinks(html) {
+  // サイトURLを取得（内部リンクは検証対象外）
+  const siteUrl = getSetting('wordpress.url', '') || '';
+  const siteHost = siteUrl ? new URL(siteUrl).hostname : '';
+
+  // <a>タグからURL抽出
+  const linkRegex = /<a\s+[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  const links = [];
+  let match;
+  while ((match = linkRegex.exec(html)) !== null) {
+    const url = match[1];
+    try {
+      const host = new URL(url).hostname;
+      // 内部リンクはスキップ
+      if (siteHost && host === siteHost) continue;
+      links.push({ fullMatch: match[0], url, text: match[2] });
+    } catch {
+      // 無効なURL → 後で除去される
+      links.push({ fullMatch: match[0], url, text: match[2] });
+    }
+  }
+
+  if (links.length === 0) return html;
+  logger.info(`外部リンク検証開始: ${links.length}件`);
+
+  // 並列でHEADリクエスト（最大同時5件）
+  const CONCURRENCY = 5;
+  const TIMEOUT_MS = 10_000; // 10秒
+  const deadLinks = [];
+
+  for (let i = 0; i < links.length; i += CONCURRENCY) {
+    const batch = links.slice(i, i + CONCURRENCY);
+    const results = await Promise.allSettled(
+      batch.map(async (link) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+        try {
+          const res = await fetch(link.url, {
+            method: 'HEAD',
+            signal: controller.signal,
+            redirect: 'follow',
+            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; LinkChecker/1.0)' },
+          });
+          clearTimeout(timer);
+          // HEADが405の場合はGETで再確認
+          if (res.status === 405) {
+            const controller2 = new AbortController();
+            const timer2 = setTimeout(() => controller2.abort(), TIMEOUT_MS);
+            try {
+              const res2 = await fetch(link.url, {
+                method: 'GET',
+                signal: controller2.signal,
+                redirect: 'follow',
+                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; LinkChecker/1.0)' },
+              });
+              clearTimeout(timer2);
+              return { link, status: res2.status, ok: res2.ok };
+            } catch {
+              clearTimeout(timer2);
+              return { link, status: 0, ok: false };
+            }
+          }
+          return { link, status: res.status, ok: res.ok };
+        } catch (err) {
+          clearTimeout(timer);
+          return { link, status: 0, ok: false, error: err.message };
+        }
+      })
+    );
+
+    for (const r of results) {
+      if (r.status === 'fulfilled') {
+        const { link, status, ok, error } = r.value;
+        if (!ok) {
+          deadLinks.push(link);
+          logger.warn(`死リンク検出 [${status || 'ERR'}]: ${link.url}${error ? ` (${error})` : ''}`);
+        }
+      } else {
+        // Promise自体のreject（通常ないが念のため）
+        logger.warn(`リンク検証エラー: ${r.reason}`);
+      }
+    }
+  }
+
+  if (deadLinks.length === 0) {
+    logger.info('外部リンク検証完了: 死リンクなし');
+    return html;
+  }
+
+  // 死リンクを除去（テキストは残す）
+  let result = html;
+  for (const dead of deadLinks) {
+    result = result.replace(dead.fullMatch, dead.text);
+    logger.info(`死リンク除去: "${dead.text}" (${dead.url})`);
+  }
+  logger.info(`外部リンク検証完了: ${deadLinks.length}件の死リンクを除去`);
+
+  return result;
+}
+
+/**
  * プレーンURL（<a>タグで囲まれていないURL）をテキストリンクに変換
  * 例: <p>https://example.com</p> → <p><a href="https://example.com">こちらのリンク</a></p>
  * 例: <p>詳しくは https://example.com をご覧ください</p>
@@ -396,6 +500,10 @@ export async function generateArticle(keyword, analysisData, context = {}) {
 
   // プレーンURLをテキストリンクに変換
   bodyHtml = convertPlainUrlsToLinks(bodyHtml);
+
+  // 外部リンクの存在チェック（死リンク除去）
+  onProgress?.({ step: 'content', message: '外部リンクを検証中...', progress: 57 });
+  bodyHtml = await validateExternalLinks(bodyHtml);
 
   // CTA挿入（設定ベース）
   bodyHtml = insertCTA(bodyHtml);
