@@ -487,15 +487,15 @@ function embedDiagramImages(bodyHtml, diagrams, uploadedDiagrams) {
 // ---------------------------------------------------------------------------
 
 /**
- * キーワードからURLスラッグを生成
- * 日本語キーワードはそのまま使用（WordPressがURL-encodeする）
- * 英数字のみならケバブケースに変換
+ * キーワードからURLスラッグを生成（英字のみ）
+ * 日本語キーワードはGeminiで英語翻訳してケバブケースに変換
+ * 英数字のみならそのままケバブケースに変換
  */
-function generateSlug(keyword, title) {
+async function generateSlug(keyword, title) {
   const source = keyword || title || '';
   if (!source) return '';
 
-  // 英数字のみの場合はケバブケースに変換
+  // 英数字のみの場合はそのままケバブケースに変換
   const hasJapanese = /[ぁ-んァ-ヶ亜-熙々〇]/.test(source);
   if (!hasJapanese) {
     return source
@@ -506,7 +506,39 @@ function generateSlug(keyword, title) {
       .replace(/^-|-$/g, '');
   }
 
-  // 日本語の場合はスペースをハイフンに、不要な記号を除去
+  // 日本語の場合はGeminiで英語スラッグを生成
+  try {
+    const { GoogleGenerativeAI } = await import('@google/generative-ai');
+    const genAI = new GoogleGenerativeAI(config.gemini.apiKey);
+    const model = genAI.getGenerativeModel({ model: config.gemini.textModel });
+
+    const prompt = `以下の日本語キーワードを、SEOに最適な英語のURLスラッグに変換してください。
+ルール:
+- 英語の単語をハイフンで繋いだケバブケースで出力
+- すべて小文字
+- 3〜6単語程度
+- スラッグのみを出力（説明不要）
+
+キーワード: ${source}`;
+
+    const result = await model.generateContent(prompt);
+    const slug = result.response.text()
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+
+    if (slug && slug.length > 0) {
+      logger.info(`スラッグ生成（AI翻訳）: "${source}" → "${slug}"`);
+      return slug;
+    }
+  } catch (err) {
+    logger.warn(`スラッグAI生成失敗: ${err.message} — フォールバック使用`);
+  }
+
+  // フォールバック: 日本語のまま（WordPressがURL-encode）
   return source
     .replace(/[\s　]+/g, '-')
     .replace(/[!！?？、。,.\[\]【】「」『』（）()]/g, '')
@@ -621,7 +653,7 @@ export async function postToWordPress(article, imageFiles, options = {}) {
     logger.info('--- WordPress投稿作成 ---');
 
     // スラッグ（パーマリンク）生成
-    const slug = options.slug || generateSlug(article.keyword, article.title);
+    const slug = options.slug || await generateSlug(article.keyword, article.title);
 
     const postData = {
       title: article.title,

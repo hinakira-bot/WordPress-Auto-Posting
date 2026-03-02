@@ -403,9 +403,9 @@ export function convertToGutenbergBlocks(html, settings = {}) {
         continue;
       }
 
-      // Inside a SWELL block div — skip
+      // SWELL block div — wrap in wp:html so WordPress recognizes it as a Gutenberg block
       if (/class\s*=\s*["'][^"']*swell-block-/i.test(trimmed)) {
-        result.push(block);
+        result.push(`<!-- wp:html -->\n${trimmed}\n<!-- /wp:html -->`);
         continue;
       }
 
@@ -421,8 +421,12 @@ export function convertToGutenbergBlocks(html, settings = {}) {
       const wrap = gutenbergWrapFor(tag, trimmed);
 
       if (!wrap) {
-        // Unrecognised tag — leave as-is (e.g. <div> without SWELL class)
-        result.push(block);
+        // Unrecognised tag (e.g. <div> without SWELL class) — wrap in wp:html
+        if (t === 'div') {
+          result.push(`<!-- wp:html -->\n${trimmed}\n<!-- /wp:html -->`);
+        } else {
+          result.push(block);
+        }
         continue;
       }
 
