@@ -234,6 +234,24 @@ function convertBalloonBlock($, el) {
 }
 
 // ---------------------------------------------------------------------------
+// Conversion: group box (border / background style)
+// ---------------------------------------------------------------------------
+function convertGroupBox($, el, cssClass) {
+  const $el = $(el);
+  const body = $el.html() || '';
+
+  const output = [
+    `<div class="wp-block-group ${cssClass}">`,
+    `  <div class="wp-block-group__inner-container">`,
+    `    ${body.trim()}`,
+    `  </div>`,
+    `</div>`,
+  ].join('\n');
+
+  $el.replaceWith(output);
+}
+
+// ---------------------------------------------------------------------------
 // SWELL type -> { settingsKey, handler }
 // ---------------------------------------------------------------------------
 const SWELL_TYPES = {
@@ -243,6 +261,15 @@ const SWELL_TYPES = {
   step: { settingsKey: 'stepBlock', handler: convertStepBlock },
   faq: { settingsKey: 'faqBlock', handler: convertFaqBlock },
   balloon: { settingsKey: 'balloonBlock', handler: convertBalloonBlock },
+  // ボーダー設定
+  border: { settingsKey: 'groupStyle', handler: ($, el) => convertGroupBox($, el, 'has-border -border01') },
+  'border-double': { settingsKey: 'groupStyle', handler: ($, el) => convertGroupBox($, el, 'has-border -border02') },
+  'border-dashed': { settingsKey: 'groupStyle', handler: ($, el) => convertGroupBox($, el, 'has-border -border03') },
+  'bg-color': { settingsKey: 'groupStyle', handler: ($, el) => convertGroupBox($, el, 'has-border -border04') },
+  // スタイル（背景装飾）
+  stripe: { settingsKey: 'groupStyle', handler: ($, el) => convertGroupBox($, el, 'is-style-bg_stripe') },
+  grid: { settingsKey: 'groupStyle', handler: ($, el) => convertGroupBox($, el, 'is-style-bg_grid') },
+  stitch: { settingsKey: 'groupStyle', handler: ($, el) => convertGroupBox($, el, 'is-style-stitch') },
 };
 
 // ===========================================================================

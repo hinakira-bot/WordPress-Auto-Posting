@@ -34,6 +34,7 @@ const DEFAULT_SETTINGS = {
     faqBlock: true,
     balloonBlock: true,
     checkList: true,
+    groupStyle: true,
   },
 };
 
