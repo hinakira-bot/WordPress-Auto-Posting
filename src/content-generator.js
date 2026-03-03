@@ -388,6 +388,32 @@ function removeInternalLink(html, link) {
 }
 
 /**
+ * リンクを含まない「関連記事」ボックスを除去
+ * AIがリンクなしで「関連記事：○○」テキストだけ生成したケースや、
+ * リンク除去後に残った空の関連記事ボックスを削除する
+ */
+function removeEmptyRelatedBoxes(html) {
+  let removedCount = 0;
+
+  // border-dashed内に「関連記事」テキストがあるが <a> タグがないものを除去
+  const result = html.replace(
+    /<div[^>]*data-swell="border-dashed"[^>]*>([\s\S]*?)<\/div>/gi,
+    (match, inner) => {
+      if (/関連記事/.test(inner) && !/<a\s/i.test(inner)) {
+        removedCount++;
+        return '';
+      }
+      return match;
+    }
+  );
+
+  if (removedCount > 0) {
+    logger.info(`リンクなし関連記事ボックスを${removedCount}件除去`);
+  }
+  return result;
+}
+
+/**
  * 外部リンクのURL存在チェック
  * 死リンク（404, タイムアウト, DNS失敗等）はリンクを解除してテキストのみ残す
  */
@@ -615,6 +641,9 @@ export async function generateArticle(keyword, analysisData, context = {}) {
   // 外部リンクの存在チェック（死リンク除去）
   onProgress?.({ step: 'content', message: '外部リンクを検証中...', progress: 57 });
   bodyHtml = await validateExternalLinks(bodyHtml);
+
+  // リンクなし「関連記事」ボックスを除去
+  bodyHtml = removeEmptyRelatedBoxes(bodyHtml);
 
   // CTA挿入（設定ベース）
   bodyHtml = insertCTA(bodyHtml);
