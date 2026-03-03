@@ -9,6 +9,14 @@ function innerHtml($, sel) {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: ensure heading tags have wp-block-heading class (WordPress 6.x+)
+// ---------------------------------------------------------------------------
+function ensureHeadingClass(html) {
+  if (!html || html.includes('wp-block-heading')) return html;
+  return html.replace(/(<h[1-6])([\s>])/i, '$1 class="wp-block-heading"$2');
+}
+
+// ---------------------------------------------------------------------------
 // Helper: get trimmed text content of the first matching child, then remove it
 // Returns { title, $ } where $ is the mutated cheerio instance
 // ---------------------------------------------------------------------------
@@ -50,7 +58,7 @@ function convertInnerToGutenberg(html) {
     if (!trimmed) continue;
 
     // Already has Gutenberg comments — skip
-    if (/<!--\s*wp:/.test(trimmed)) {
+    if (/<!--\s*\/?wp:/.test(trimmed)) {
       result.push(trimmed);
       continue;
     }
@@ -71,13 +79,13 @@ function convertInnerToGutenberg(html) {
         result.push(`<!-- wp:paragraph -->\n${trimmed}\n<!-- /wp:paragraph -->`);
         break;
       case 'h2':
-        result.push(`<!-- wp:heading -->\n${trimmed}\n<!-- /wp:heading -->`);
+        result.push(`<!-- wp:heading -->\n${ensureHeadingClass(trimmed)}\n<!-- /wp:heading -->`);
         break;
       case 'h3':
-        result.push(`<!-- wp:heading {"level":3} -->\n${trimmed}\n<!-- /wp:heading -->`);
+        result.push(`<!-- wp:heading {"level":3} -->\n${ensureHeadingClass(trimmed)}\n<!-- /wp:heading -->`);
         break;
       case 'h4':
-        result.push(`<!-- wp:heading {"level":4} -->\n${trimmed}\n<!-- /wp:heading -->`);
+        result.push(`<!-- wp:heading {"level":4} -->\n${ensureHeadingClass(trimmed)}\n<!-- /wp:heading -->`);
         break;
       case 'ul': {
         const wrapped = wrapListForGutenberg(trimmed, false);
@@ -148,15 +156,22 @@ function convertCaptionBox($, el, style) {
   const title = extractTitle($el, $);
   const body = $el.html() || '';
 
-  const className = style === 'note'
-    ? 'swell-block-capbox is-style-caution_ttl'
-    : 'swell-block-capbox is-style-onbdr_ttl2';
+  const styleClass = style === 'note'
+    ? 'is-style-caution_ttl'
+    : 'is-style-onborder_ttl2';
 
+  // Convert inner content to Gutenberg blocks
+  const innerBlocks = convertInnerToGutenberg(body);
+
+  // Use SWELL's native wp:loos/cap-block format (not wp:html)
   const output = [
-    `<div class="${className}">`,
-    `  <div class="swell-block-capbox__title">${title}</div>`,
-    `  <div class="swell-block-capbox__body">${body.trim()}</div>`,
-    `</div>`,
+    `<!-- wp:loos/cap-block {"className":"${styleClass}"} -->`,
+    `<div class="swell-block-capbox cap_box ${styleClass}">`,
+    `<div class="cap_box_ttl"><span>${title}</span></div>`,
+    `<div class="cap_box_content">`,
+    innerBlocks,
+    `</div></div>`,
+    `<!-- /wp:loos/cap-block -->`,
   ].join('\n');
 
   $el.replaceWith(output);
@@ -182,12 +197,19 @@ function convertCheckList($, el) {
     items = parts.join('\n');
   }
 
+  // Wrap each li in wp:list-item comments
+  const wrappedItems = items.replace(/<li>/g, '<!-- wp:list-item -->\n<li>').replace(/<\/li>/g, '</li>\n<!-- /wp:list-item -->');
+
+  // Use SWELL's native wp:loos/cap-block with check_list style
   const output = [
-    `<div class="swell-block-capbox is-style-check_list">`,
-    `  <div class="swell-block-capbox__body">`,
-    `    <ul class="is-style-check_list">${items}</ul>`,
-    `  </div>`,
-    `</div>`,
+    `<!-- wp:loos/cap-block {"className":"is-style-check_list"} -->`,
+    `<div class="swell-block-capbox cap_box is-style-check_list">`,
+    `<div class="cap_box_content">`,
+    `<!-- wp:list -->`,
+    `<ul class="is-style-check_list wp-block-list">${wrappedItems}</ul>`,
+    `<!-- /wp:list -->`,
+    `</div></div>`,
+    `<!-- /wp:loos/cap-block -->`,
   ].join('\n');
 
   $el.replaceWith(output);
@@ -362,7 +384,7 @@ function convertGroupBox($, el, cssClass) {
   const innerBlocks = convertInnerToGutenberg(body);
 
   const output = [
-    `<!-- wp:group {"className":"${cssClass}"} -->`,
+    `<!-- wp:group {"className":"${cssClass}","layout":{"type":"constrained"}} -->`,
     `<div class="wp-block-group ${cssClass}">`,
     innerBlocks,
     `</div>`,
@@ -389,7 +411,7 @@ const SWELL_TYPES = {
       convertBalloonBlock($, el, balloonID);
     },
   },
-  // ボーダー設定
+  // ボーダー設定（SWELLボーダーセット: has-border + -border0X）
   border: { settingsKey: 'groupStyle', handler: ($, el, settings) => convertGroupBox($, el, 'has-border -border01') },
   'border-double': { settingsKey: 'groupStyle', handler: ($, el, settings) => convertGroupBox($, el, 'has-border -border02') },
   'border-dashed': { settingsKey: 'groupStyle', handler: ($, el, settings) => convertGroupBox($, el, 'has-border -border03') },
@@ -545,7 +567,7 @@ export function convertToGutenbergBlocks(html, settings = {}) {
     const result = [];
 
     for (const block of blocks) {
-      const trimmed = block.trim();
+      let trimmed = block.trim();
 
       if (!trimmed) {
         // Preserve blank lines
@@ -554,7 +576,7 @@ export function convertToGutenbergBlocks(html, settings = {}) {
       }
 
       // Already has Gutenberg comments (wp:group, wp:loos/balloon, wp:loos/step, etc.) — skip
-      if (/<!--\s*wp:/.test(trimmed)) {
+      if (/<!--\s*\/?wp:/.test(trimmed)) {
         result.push(block);
         continue;
       }
@@ -595,6 +617,11 @@ export function convertToGutenbergBlocks(html, settings = {}) {
       }
 
       const [open, close, needsFigure] = wrap;
+
+      // Add wp-block-heading class to heading elements (WordPress 6.x+)
+      if (/^h[1-6]$/.test(tag)) {
+        trimmed = ensureHeadingClass(trimmed);
+      }
 
       if (needsFigure && tag === 'table') {
         // Tables need to be wrapped in <figure class="wp-block-table">
@@ -667,6 +694,21 @@ function splitTopLevelElements(html) {
 
         if (depth <= 0) {
           depth = 0;
+
+          // Look ahead: if next non-whitespace is a Gutenberg closing comment
+          // (<!-- /wp:xxx -->), include it in this block to keep block structure intact.
+          // Without this, <!-- /wp:group --> gets separated from its opening comment
+          // and WordPress fails to parse the block (resulting in Classic blocks).
+          let peek = i;
+          while (peek < html.length && /[\s]/.test(html[peek])) peek++;
+          if (html.startsWith('<!-- /wp:', peek) || html.startsWith('<!--/wp:', peek)) {
+            const commentEnd = html.indexOf('-->', peek);
+            if (commentEnd !== -1) {
+              current += html.slice(i, commentEnd + 3);
+              i = commentEnd + 3;
+            }
+          }
+
           blocks.push(current);
           current = '';
         }
