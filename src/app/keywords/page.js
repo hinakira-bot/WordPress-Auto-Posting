@@ -162,6 +162,7 @@ export default function KeywordsPage() {
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">キーワード</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">説明</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">ステータス</th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">URL</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">日時</th>
                 <th className="text-right px-6 py-3 text-xs font-medium text-gray-500 uppercase">操作</th>
               </tr>
@@ -177,6 +178,22 @@ export default function KeywordsPage() {
                   </td>
                   <td className="px-6 py-4">
                     <StatusBadge status={kw.status} />
+                  </td>
+                  <td className="px-6 py-4 text-sm max-w-[200px] truncate">
+                    {kw.postUrl ? (
+                      <a
+                        href={kw.postUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:text-blue-800 hover:underline"
+                        title={kw.postUrl}
+                      >
+                        {kw.postUrl.replace(/^https?:\/\//, '').slice(0, 30)}
+                        {kw.postUrl.replace(/^https?:\/\//, '').length > 30 ? '…' : ''}
+                      </a>
+                    ) : (
+                      <span className="text-gray-400">-</span>
+                    )}
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-500">
                     {kw.postedAt
