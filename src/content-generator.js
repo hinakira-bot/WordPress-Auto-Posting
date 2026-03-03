@@ -282,80 +282,109 @@ function insertCTA(html) {
 
 /**
  * 内部リンクのバリデーション
- * 既存記事一覧に存在しないURLへの内部リンクを除去する
- * AIが捏造した架空の記事リンクを防ぐセーフティネット
+ * 1) AI捏造チェック: 既存記事一覧にないURLを除去
+ * 2) 実在チェック: HEADリクエストでWPから削除された記事を検出・除去
  */
-function validateInternalLinks(html, existingArticlesText) {
-  if (!existingArticlesText) return html;
-
+async function validateInternalLinks(html, existingArticlesText) {
   const siteUrl = getSetting('wordpress.url', '') || '';
   const siteHost = siteUrl ? new URL(siteUrl).hostname : '';
   if (!siteHost) return html;
 
   // 既存記事一覧からURLセットを構築
   const validUrls = new Set();
-  const urlPattern = /https?:\/\/[^\s）」]+/g;
-  let m;
-  while ((m = urlPattern.exec(existingArticlesText)) !== null) {
-    validUrls.add(m[0].replace(/\/+$/, ''));
+  if (existingArticlesText) {
+    const urlPattern = /https?:\/\/[^\s）」]+/g;
+    let m;
+    while ((m = urlPattern.exec(existingArticlesText)) !== null) {
+      validUrls.add(m[0].replace(/\/+$/, ''));
+    }
   }
-  if (validUrls.size === 0) return html;
 
-  // 内部リンクを検証
+  // HTML内の全内部リンクを抽出
   const linkRegex = /<a\s+[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-  let removedCount = 0;
-  let result = html;
-
   const internalLinks = [];
   let match;
   while ((match = linkRegex.exec(html)) !== null) {
     try {
       const host = new URL(match[1]).hostname;
       if (host === siteHost) {
-        const normalizedUrl = match[1].replace(/\/+$/, '');
-        if (!validUrls.has(normalizedUrl)) {
-          internalLinks.push({ fullMatch: match[0], url: match[1], text: match[2] });
-        }
+        internalLinks.push({ fullMatch: match[0], url: match[1], text: match[2] });
       }
     } catch { /* invalid URL */ }
   }
 
+  if (internalLinks.length === 0) return html;
+  logger.info(`内部リンク検証開始: ${internalLinks.length}件`);
+
+  // 各内部リンクを検証（一覧照合 + HEAD実在チェック）
+  const deadLinks = [];
+  const TIMEOUT_MS = 8_000;
+
   for (const link of internalLinks) {
-    // border-dashed で囲まれた装飾ごと削除を試みる
-    const escapedLink = link.fullMatch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const decoratedPattern = new RegExp(
-      `<div[^>]*data-swell="border-dashed"[^>]*>[\\s\\S]*?${escapedLink}[\\s\\S]*?<\\/div>`,
-      'gi'
-    );
-    if (decoratedPattern.test(result)) {
-      result = result.replace(decoratedPattern, '');
-      removedCount++;
-      logger.info(`架空の内部リンクを装飾ごと除去: "${link.text}" → ${link.url}`);
-    } else {
-      // リンクタグのみ除去（テキストは残さない - 架空記事への言及自体を削除）
-      // リンクを含む <p> タグ全体を削除
-      const escapedLinkForP = link.fullMatch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const pPattern = new RegExp(`<p>[^<]*${escapedLinkForP}[^<]*<\\/p>`, 'gi');
-      if (pPattern.test(result)) {
-        result = result.replace(pPattern, '');
-        removedCount++;
-        logger.info(`架空の内部リンクを段落ごと除去: "${link.text}" → ${link.url}`);
-      } else {
-        // 最後の手段: リンクタグだけ除去しテキストのみ残す
-        result = result.replace(link.fullMatch, link.text);
-        removedCount++;
-        logger.info(`架空の内部リンクを解除（テキスト残し）: "${link.text}" → ${link.url}`);
+    const normalizedUrl = link.url.replace(/\/+$/, '');
+
+    // 1) 一覧にないURL → AI捏造の可能性大
+    if (validUrls.size > 0 && !validUrls.has(normalizedUrl)) {
+      deadLinks.push({ ...link, reason: '一覧に存在しないURL' });
+      continue;
+    }
+
+    // 2) HEADリクエストで実在確認（WPから削除されたか？）
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+      const resp = await fetch(link.url, {
+        method: 'HEAD',
+        redirect: 'follow',
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (resp.status === 404 || resp.status === 410) {
+        deadLinks.push({ ...link, reason: `HTTP ${resp.status} (記事が削除済み)` });
       }
+    } catch {
+      // タイムアウトやネットワークエラーは通過させる（記事が存在する可能性）
+      logger.info(`内部リンク検証: タイムアウト/エラー（通過）: ${link.url}`);
     }
   }
 
-  if (removedCount > 0) {
-    logger.warn(`内部リンク検証: ${removedCount}件の架空リンクを除去しました`);
+  // 無効なリンクを除去
+  let result = html;
+  for (const link of deadLinks) {
+    result = removeInternalLink(result, link);
+    logger.info(`内部リンク除去 [${link.reason}]: "${link.text}" → ${link.url}`);
+  }
+
+  if (deadLinks.length > 0) {
+    logger.warn(`内部リンク検証: ${deadLinks.length}件の無効リンクを除去`);
   } else {
-    logger.info(`内部リンク検証: OK（${validUrls.size}件の既存記事と照合）`);
+    logger.info(`内部リンク検証: OK（${internalLinks.length}件すべて有効）`);
   }
 
   return result;
+}
+
+/** 内部リンクをHTMLから除去するヘルパー */
+function removeInternalLink(html, link) {
+  const escapedLink = link.fullMatch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // 1) border-dashed 装飾ごと削除
+  const decoratedPattern = new RegExp(
+    `<div[^>]*data-swell="border-dashed"[^>]*>[\\s\\S]*?${escapedLink}[\\s\\S]*?<\\/div>`,
+    'gi'
+  );
+  if (decoratedPattern.test(html)) {
+    return html.replace(decoratedPattern, '');
+  }
+
+  // 2) リンクを含む <p> タグ全体を削除
+  const pPattern = new RegExp(`<p>[^<]*${escapedLink}[^<]*<\\/p>`, 'gi');
+  if (pPattern.test(html)) {
+    return html.replace(pPattern, '');
+  }
+
+  // 3) 最後の手段: リンクタグだけ除去しテキストのみ残す
+  return html.replace(link.fullMatch, link.text);
 }
 
 /**
@@ -579,8 +608,9 @@ export async function generateArticle(keyword, analysisData, context = {}) {
   // プレーンURLをテキストリンクに変換
   bodyHtml = convertPlainUrlsToLinks(bodyHtml);
 
-  // 内部リンクの検証（架空記事リンク除去）
-  bodyHtml = validateInternalLinks(bodyHtml, existingArticles);
+  // 内部リンクの検証（架空記事 + WP削除済み記事のリンク除去）
+  onProgress?.({ step: 'content', message: '内部リンクを検証中...', progress: 57 });
+  bodyHtml = await validateInternalLinks(bodyHtml, existingArticles);
 
   // 外部リンクの存在チェック（死リンク除去）
   onProgress?.({ step: 'content', message: '外部リンクを検証中...', progress: 57 });
